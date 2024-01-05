@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use normalize_path::NormalizePath;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, BufWriter};
 use std::path::Path;
 
 use crate::huffman;
@@ -104,10 +104,10 @@ pub fn extract_record<R: Read, P: AsRef<Path>>(
     if !dir.exists() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut writer = File::create(&out_name)?;
+    let writer = File::create(&out_name)?;
+    let mut writer = BufWriter::new(writer);
     if decompress {
         huffman::decompress_stream(reader, &mut writer, size)?;
-        //copy_stream(reader, &mut writer, size)?;
     } else {
         copy_stream(reader, &mut writer, size)?;
     }

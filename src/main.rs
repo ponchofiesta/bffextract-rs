@@ -5,7 +5,7 @@ mod util;
 use anyhow::anyhow;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use std::io::SeekFrom;
+use std::io::{SeekFrom, BufReader};
 use std::{
     fs::File,
     io::{Read, Seek},
@@ -70,11 +70,12 @@ fn extract_file<R: Read + Seek, P: AsRef<Path>>(reader: &mut R, out_dir: P) -> R
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let mut reader = File::open(&args.filename)
+    let reader = File::open(&args.filename)
         .with_context(|| format!("Failed to open input file {0}.", &args.filename))?;
     if reader.metadata().unwrap().len() > 0xffffffff {
         return Err(anyhow!("Filesize to big. Files must by up to 4 GB big."));
     }
+    let mut reader = BufReader::new(reader);
     let file_header: bff::FileHeader = util::read_struct(&mut reader)?;
     // println!("{}", size_of::<bff::FileHeader>());
     if file_header.magic != bff::FILE_MAGIC {

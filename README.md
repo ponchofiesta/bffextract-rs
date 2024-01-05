@@ -19,5 +19,4 @@ Options:
 
 ## Limitations
 
-- Decompression of compressed files is very slow.
 - Empty folders are not extracted. Currently only files are extracted and their parent folders are created implicitly.
