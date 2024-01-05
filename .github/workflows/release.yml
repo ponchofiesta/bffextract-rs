@@ -1,0 +1,57 @@
+name: Create release
+
+on:
+  push:
+    tags:
+    - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+
+  pre:
+    runs-on: ubuntu-20.04
+    outputs:
+      version: ${{ steps.get_variables.outputs.version }}
+      artifact_name: ${{ steps.get_variables.outputs.artifact_name }}
+    steps:
+      - id: get_variables
+        run: |
+          echo ::set-output name=artifact_name::${GITHUB_REPOSITORY##*/}
+          echo ::set-output name=version::${GITHUB_REF##*/}
+ 
+  build-and-publish:
+    name: Build and publish for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: [pre]
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-20.04
+            pack: tar czf ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-linux.tar.gz target/x86_64-unknown-linux-musl/release/${{ needs.pre.outputs.artifact_name }} README.md LICENSE-MIT
+            asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-linux.tar.gz
+            build: cargo build --release --locked --target x86_64-unknown-linux-musl
+          - os: windows-2019
+            pack: Compress-Archive -DestinationPath ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip -Path target\release\${{ needs.pre.outputs.artifact_name }}.exe, README.md, LICENSE-MIT
+            asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip
+            build: cargo build --release --locked
+          - os: macos-11
+            pack: tar czf ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-macos.tar.gz target/release/${{ needs.pre.outputs.artifact_name }} README.md LICENSE-MIT
+            asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-macos.tar.gz
+            build: cargo build --release --locked
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install MUSL
+      if: matrix.os == 'ubuntu-20.04'
+      run: rustup target add x86_64-unknown-linux-musl
+    - name: Build
+      run: ${{ matrix.build }}
+    - name: Pack
+      run: ${{ matrix.pack }}
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ matrix.asset_name }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
