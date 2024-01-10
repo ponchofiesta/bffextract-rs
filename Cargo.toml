@@ -1,11 +1,13 @@
 [package]
-name = "bffextract-rs"
+name = "bffextract"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.79"
+chrono = "0.4.31"
 clap = { version = "4.4.12", features = ["derive"] }
+comfy-table = { version = "7.1.0", default-features = false }
+filetime = "0.2.23"
 normalize-path = "0.2.1"

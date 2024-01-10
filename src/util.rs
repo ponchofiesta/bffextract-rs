@@ -1,4 +1,4 @@
-use anyhow::Result;
+
 use std::slice::from_raw_parts_mut;
 use std::{
     cmp::min,
@@ -7,7 +7,7 @@ use std::{
 use std::{io, mem};
 
 /// Read defined size of reader stream and copy to writer stream.
-pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W, size: usize) -> Result<()> {
+pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W, size: usize) -> Result<(), io::Error> {
     const BUF_SIZE: usize = 1024;
     let mut total = 0;
     let mut to_read = min(BUF_SIZE, size);
