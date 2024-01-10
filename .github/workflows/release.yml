@@ -16,10 +16,12 @@ jobs:
       version: ${{ steps.get_variables.outputs.version }}
       artifact_name: ${{ steps.get_variables.outputs.artifact_name }}
     steps:
+      - uses: actions/checkout@v4
       - id: get_variables
         run: |
-          echo ::set-output name=artifact_name::${GITHUB_REPOSITORY##*/}
-          echo ::set-output name=version::${GITHUB_REF##*/}
+          artifact_name=$(yq .package.name Cargo.toml)
+          echo "artifact_name=$artifact_name" >> $GITHUB_OUTPUT
+          echo "version=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
  
   build-and-publish:
     name: Build and publish for ${{ matrix.os }}
@@ -41,7 +43,7 @@ jobs:
             asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-macos.tar.gz
             build: cargo build --release --locked
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Install MUSL
       if: matrix.os == 'ubuntu-20.04'
       run: rustup target add x86_64-unknown-linux-musl
