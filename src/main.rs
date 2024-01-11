@@ -41,6 +41,14 @@ struct Args {
         help = "Displays details while extracting."
     )]
     verbose: bool,
+
+    #[arg(
+        short = 'n',
+        long,
+        default_value_t = false,
+        help = "List numeric user and group IDs."
+    )]
+    numeric: bool,
 }
 
 /// Extract single file from stream to target directory.
@@ -109,23 +117,13 @@ fn extract_file<R: Read + Seek, P: AsRef<Path>>(
 }
 
 /// Print content of BFF file for CLI output
-fn print_content<R: Read + Seek>(reader: &mut R) {
+fn print_content<R: Read + Seek>(reader: &mut R, numeric: bool) {
     let date_format = "%Y-%m-%d %H:%M:%S";
     let mut table = Table::new();
     table.set_header(Row::from(vec![
         "UID", "GID", "Size", "Modified", "Filename",
     ]));
     table.load_preset(presets::NOTHING);
-    let user_data = util::UserData::new();
-    bff::get_record_listing(reader).for_each(|item| {
-        table.add_row(vec![
-            user_data.get_username_by_uid(item.uid).unwrap_or(format!("{}", item.uid)),
-            user_data.get_groupname_by_gid(item.gid).unwrap_or(format!("{}", item.gid)),
-            format!("{}", item.size),
-            item.mdate.format(date_format).to_string(),
-            item.filename,
-        ]);
-    });
     table
         .column_mut(0)
         .unwrap()
@@ -138,6 +136,30 @@ fn print_content<R: Read + Seek>(reader: &mut R) {
         .column_mut(2)
         .unwrap()
         .set_cell_alignment(CellAlignment::Right);
+
+    let user_data = util::UserData::new();
+    bff::get_record_listing(reader).for_each(|item| {
+        table.add_row(vec![
+            if numeric {
+                format!("{}", item.uid)
+            } else {
+                user_data
+                    .get_username_by_uid(item.uid)
+                    .unwrap_or(format!("{}", item.uid))
+            },
+            if numeric {
+                format!("{}", item.gid)
+            } else {
+                user_data
+                    .get_groupname_by_gid(item.gid)
+                    .unwrap_or(format!("{}", item.gid))
+            },
+            format!("{}", item.size),
+            item.mdate.format(date_format).to_string(),
+            item.filename,
+        ]);
+    });
+
     println!("{table}");
 }
 
@@ -152,7 +174,7 @@ fn main() -> Result<(), BffError> {
     read_file_header(&mut reader)?;
 
     if args.list {
-        print_content(&mut reader);
+        print_content(&mut reader, args.numeric);
     } else {
         loop {
             match extract_file(&mut reader, &args.chdir, args.verbose) {

@@ -16,6 +16,7 @@ Options:
   -C, --chdir <CHDIR>  Path to BFF file. [default: .]
   -t, --list           List content of BFF archive.
   -v, --verbose        Displays details while extracting.
+  -n, --numeric        List numeric user and group IDs.
   -h, --help           Print help
 ```
 
