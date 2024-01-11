@@ -113,15 +113,15 @@ fn print_content<R: Read + Seek>(reader: &mut R) {
     let date_format = "%Y-%m-%d %H:%M:%S";
     let mut table = Table::new();
     table.set_header(Row::from(vec![
-        "Size", "UID", "GID", "Modified", "Filename",
+        "UID", "GID", "Size", "Modified", "Filename",
     ]));
     table.load_preset(presets::NOTHING);
     let user_data = util::UserData::new();
     bff::get_record_listing(reader).for_each(|item| {
         table.add_row(vec![
-            format!("{}", item.size),
             user_data.get_username_by_uid(item.uid).unwrap_or(format!("{}", item.uid)),
             user_data.get_groupname_by_gid(item.gid).unwrap_or(format!("{}", item.gid)),
+            format!("{}", item.size),
             item.mdate.format(date_format).to_string(),
             item.filename,
         ]);
