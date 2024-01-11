@@ -1,4 +1,5 @@
 use chrono::prelude::*;
+use file_mode::Mode;
 use std::error::Error;
 use std::fmt::Display;
 use std::fs::File;
@@ -37,8 +38,8 @@ pub struct RecordHeader {
     pub unk00: u16,
     pub magic: u16,
     pub unk04: u32,
-    pub unk08: u32,
-    pub unk0_c: u32,
+    pub unk08: u32, // maybe directory ID or counter, always 0 for files
+    pub mode: u32,
     pub uid: u32,
     pub gid: u32,
     pub size: u32,
@@ -125,6 +126,7 @@ pub struct Record {
     pub filename: String,
     pub compressed_size: u32,
     pub size: u32,
+    pub mode: Mode,
     pub uid: u32,
     pub gid: u32,
     pub mdate: NaiveDateTime,
@@ -132,12 +134,14 @@ pub struct Record {
     pub file_position: u32,
 }
 
+
 impl From<RecordHeader> for Record {
     fn from(value: RecordHeader) -> Self {
         Record {
             filename: "".into(),
             compressed_size: value.compressed_size,
             size: value.size,
+            mode: Mode::from(value.mode),
             uid: value.uid,
             gid: value.gid,
             mdate: NaiveDateTime::from_timestamp_opt(value.mtime as i64, 0)
@@ -245,6 +249,8 @@ pub enum BffReadError {
 #[derive(Debug)]
 pub enum BffExtractError {
     IoError(std::io::Error),
+    #[allow(dead_code)]
+    ModeError(Box<dyn Error>),
 }
 
 impl Error for BffReadError {}
@@ -281,6 +287,9 @@ impl Display for BffExtractError {
         match self {
             BffExtractError::IoError(io_error) => {
                 write!(f, "Failed to extract BFF file: {io_error}")
+            },
+            BffExtractError::ModeError(mode_error) => {
+                write!(f, "Failed to set file modes: {mode_error}")
             }
         }
     }

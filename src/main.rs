@@ -2,9 +2,12 @@ mod bff;
 mod huffman;
 mod util;
 
-use bff::{read_file_header, BffError, BffExtractError, BffReadError};
+use bff::{read_file_header, BffError, BffExtractError, BffReadError, Record};
 use clap::Parser;
 use comfy_table::{presets, CellAlignment, Row, Table};
+use file_mode::FileType;
+#[cfg(unix)]
+use file_mode::ModePath;
 use filetime::{set_file_times, FileTime};
 use normalize_path::NormalizePath;
 use std::io::{self, BufReader, SeekFrom};
@@ -69,42 +72,56 @@ fn extract_file<R: Read + Seek, P: AsRef<Path>>(
     let filename = bff::read_aligned_string(reader).map_err(|err| BffReadError::IoError(err))?;
     let _record_trailer: bff::RecordTrailer =
         util::read_struct(reader).map_err(|err| BffReadError::IoError(err))?;
+    let record: Record = record_header.into();
+    let target_path = out_dir.as_ref().join(&filename).normalize();
 
-    if record_header.size > 0 {
-        // File record
-
-        // Create base directories
-        let target_path = out_dir.as_ref().join(&filename).normalize();
-        let target_dir = target_path.parent().ok_or(BffError::MissingParentDir(
-            target_path.display().to_string(),
-        ))?;
-        if !target_dir.exists() {
-            std::fs::create_dir_all(target_dir).map_err(|err| BffExtractError::IoError(err))?;
-        }
-
-        let decompress = record_header.magic == bff::HUFFMAN_MAGIC;
-
-        if verbose {
-            println!("{}", target_path.display());
-        }
-
-        bff::extract_record(
-            reader,
-            &filename,
-            record_header.compressed_size as usize,
-            decompress,
-            &target_path,
-        )?;
-        set_file_times(
-            &target_path,
-            FileTime::from_unix_time(record_header.atime as i64, 0),
-            FileTime::from_unix_time(record_header.mtime as i64, 0),
-        )
-        .map_err(|err| BffExtractError::IoError(err))?;
-    } else {
-        // TODO: Extract empty folder
-        eprintln!("Unimplemented: '{filename}' has zero size and will not be extracted.");
+    if verbose {
+        println!("{}", target_path.display());
     }
+
+    match record.mode.file_type() {
+        Some(FileType::Directory) => {
+            if !target_path.exists() {
+                std::fs::create_dir_all(&target_path)
+                    .map_err(|err| BffExtractError::IoError(err))?;
+            }
+        }
+        _ => {
+            let target_dir = target_path.parent().ok_or(BffError::MissingParentDir(
+                target_path.display().to_string(),
+            ))?;
+            if !target_dir.exists() {
+                std::fs::create_dir_all(&target_dir)
+                    .map_err(|err| BffExtractError::IoError(err))?;
+            }
+
+            let decompress = record_header.magic == bff::HUFFMAN_MAGIC;
+
+            bff::extract_record(
+                reader,
+                &filename,
+                record_header.compressed_size as usize,
+                decompress,
+                &target_path,
+            )?;
+            set_file_times(
+                &target_path,
+                FileTime::from_unix_time(record_header.atime as i64, 0),
+                FileTime::from_unix_time(record_header.mtime as i64, 0),
+            )
+            .map_err(|err| BffExtractError::IoError(err))?;
+        }
+    }
+
+    set_file_times(
+        &target_path,
+        FileTime::from_unix_time(record_header.atime as i64, 0),
+        FileTime::from_unix_time(record_header.mtime as i64, 0),
+    )
+    .map_err(|err| BffExtractError::IoError(err))?;
+
+    #[cfg(unix)]
+    target_path.as_path().set_mode(record.mode.mode()).map_err(|err| BffExtractError::ModeError(Box::new(err)))?;
 
     let aligned_up = (record_header.compressed_size + 7) & !7;
     reader
@@ -121,13 +138,9 @@ fn print_content<R: Read + Seek>(reader: &mut R, numeric: bool) {
     let date_format = "%Y-%m-%d %H:%M:%S";
     let mut table = Table::new();
     table.set_header(Row::from(vec![
-        "UID", "GID", "Size", "Modified", "Filename",
+        "Mode", "UID", "GID", "Size", "Modified", "Filename",
     ]));
     table.load_preset(presets::NOTHING);
-    table
-        .column_mut(0)
-        .unwrap()
-        .set_cell_alignment(CellAlignment::Right);
     table
         .column_mut(1)
         .unwrap()
@@ -136,10 +149,15 @@ fn print_content<R: Read + Seek>(reader: &mut R, numeric: bool) {
         .column_mut(2)
         .unwrap()
         .set_cell_alignment(CellAlignment::Right);
+    table
+        .column_mut(3)
+        .unwrap()
+        .set_cell_alignment(CellAlignment::Right);
 
     let user_data = util::UserData::new();
     bff::get_record_listing(reader).for_each(|item| {
         table.add_row(vec![
+            format!("{}", item.mode),
             if numeric {
                 format!("{}", item.uid)
             } else {
@@ -197,6 +215,7 @@ fn main() -> Result<(), BffError> {
                         }
                         BffError::BffExtractError(ref extract_error) => match extract_error {
                             BffExtractError::IoError(_io_error) => return Err(e),
+                            BffExtractError::ModeError(_mode_error) => eprintln!("{e}"),
                         },
                         BffError::MissingParentDir(ref _path) => eprintln!("{e}"),
                     }

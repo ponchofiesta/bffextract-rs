@@ -22,10 +22,8 @@ Options:
 
 ## Limitations
 
-- Folders are not extracted. Currently only files are extracted and their parent folders are created implicitly.
-  - Therefore modified date is not set to folders.
 - Checksum is not verified.
-- Owner and Group gets read but actually is not set to extracted files.
+- Owner and Group gets read but actually is not set to extracted files. (But file modes will be set)
 - Bad file format may be ignored in some cases.
 
 ## Credits
