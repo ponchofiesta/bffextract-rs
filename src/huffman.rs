@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-use crate::bff::{BffError, BffReadError};
+use crate::error;
 
 pub struct HuffmanDecompressor {
     total_read: usize,
@@ -30,16 +30,18 @@ impl HuffmanDecompressor {
         reader: &mut R,
         writer: &mut W,
         size: usize,
-    ) -> Result<(), BffError> {
+    ) -> Result<(), error::BffError> {
         self.size = size;
         self.parse_header(reader)?;
         self.decode(reader, writer)?;
         Ok(())
     }
 
-    fn parse_header<R: Read>(&mut self, reader: &mut R) -> Result<(), BffError> {
+    fn parse_header<R: Read>(&mut self, reader: &mut R) -> Result<(), error::BffError> {
         let mut buffer = vec![0; 1];
-        reader.read_exact(&mut buffer).map_err(|err| BffReadError::IoError(err))?;
+        reader
+            .read_exact(&mut buffer)
+            .map_err(|err| error::BffReadError::IoError(err))?;
         self.treelevels = buffer[0] as usize;
         self.total_read = 1;
         self.inodesin = vec![0; self.treelevels];
@@ -50,7 +52,9 @@ impl HuffmanDecompressor {
 
         for i in 0..=self.treelevels {
             //let byte = reader.bytes().next().unwrap_or(Ok(0)).unwrap();
-            reader.read_exact(&mut buffer).map_err(|err| BffReadError::IoError(err))?;
+            reader
+                .read_exact(&mut buffer)
+                .map_err(|err| error::BffReadError::IoError(err))?;
             self.symbolsin[i] = buffer[0];
             self.symbol_size += self.symbolsin[i] as usize;
         }
@@ -58,7 +62,7 @@ impl HuffmanDecompressor {
         self.total_read += self.treelevels as usize;
 
         if self.symbol_size > 256 {
-            return Err(BffReadError::BadSymbolTable.into());
+            return Err(error::BffReadError::BadSymbolTable.into());
         }
 
         self.symbolsin[self.treelevels as usize] += 1;
@@ -66,7 +70,9 @@ impl HuffmanDecompressor {
         for i in 0..=self.treelevels {
             let mut symbol = Vec::new();
             for _ in 0..self.symbolsin[i as usize] {
-                reader.read_exact(&mut buffer).map_err(|err| BffReadError::IoError(err))?;
+                reader
+                    .read_exact(&mut buffer)
+                    .map_err(|err| error::BffReadError::IoError(err))?;
                 symbol.push(buffer[0]);
             }
             self.tree[i as usize] = symbol;
@@ -88,7 +94,11 @@ impl HuffmanDecompressor {
         }
     }
 
-    fn decode<R: Read, W: Write>(&mut self, reader: &mut R, writer: &mut W) -> Result<(), BffError> {
+    fn decode<R: Read, W: Write>(
+        &mut self,
+        reader: &mut R,
+        writer: &mut W,
+    ) -> Result<(), error::BffError> {
         let mut level = 0;
         let mut code = 0;
         let mut buffer = [0; 1];
@@ -97,14 +107,16 @@ impl HuffmanDecompressor {
         let treelens: Vec<usize> = self.tree.iter().map(|l| l.len()).collect();
 
         while self.total_read < self.size {
-            reader.read_exact(&mut buffer).map_err(|err| BffReadError::IoError(err))?;
+            reader
+                .read_exact(&mut buffer)
+                .map_err(|err| error::BffReadError::IoError(err))?;
             self.total_read += 1;
             for i in (0..=7).rev() {
                 code = (code << 1) | ((buffer[0] >> i) & 1);
                 if code >= self.inodesin[level] {
                     inlevelindex = (code - self.inodesin[level]) as usize;
                     if inlevelindex > self.symbolsin[level] as usize {
-                        return Err(BffReadError::InvalidLevelIndex.into());
+                        return Err(error::BffReadError::InvalidLevelIndex.into());
                     }
                     if treelens[level] <= inlevelindex {
                         // Hopefully the end of the file
@@ -117,7 +129,7 @@ impl HuffmanDecompressor {
                 } else {
                     level += 1;
                     if level > self.treelevels {
-                        return Err(BffReadError::InvalidTreelevel.into());
+                        return Err(error::BffReadError::InvalidTreelevel.into());
                     }
                 }
             }
@@ -130,7 +142,7 @@ pub fn decompress_stream<R: Read, W: Write>(
     reader: &mut R,
     writer: &mut W,
     size: usize,
-) -> Result<(), BffError> {
+) -> Result<(), error::BffError> {
     let mut decompressor = HuffmanDecompressor::new();
     decompressor.decompress_stream(reader, writer, size)?;
     Ok(())

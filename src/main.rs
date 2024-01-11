@@ -1,8 +1,8 @@
 mod bff;
+mod error;
 mod huffman;
 mod util;
 
-use bff::{read_file_header, BffError, BffExtractError, BffReadError, Record};
 use clap::Parser;
 use comfy_table::{presets, CellAlignment, Row, Table};
 use file_mode::FileType;
@@ -59,21 +59,24 @@ fn extract_file<R: Read + Seek, P: AsRef<Path>>(
     reader: &mut R,
     out_dir: P,
     verbose: bool,
-) -> Result<(), BffError> {
+) -> Result<(), error::BffError> {
     let record_header: bff::RecordHeader =
-        util::read_struct(reader).map_err(|err| BffReadError::IoError(err))?;
+        util::read_struct(reader).map_err(|err| error::BffReadError::IoError(err))?;
     if !bff::HEADER_MAGICS
         .iter()
         .any(|magic| *magic == record_header.magic)
     {
         let magic = record_header.magic;
-        return Err(BffReadError::InvalidRecordMagic(magic).into());
+        return Err(error::BffReadError::InvalidRecordMagic(magic).into());
     }
-    let filename = bff::read_aligned_string(reader).map_err(|err| BffReadError::IoError(err))?;
+    let filename = bff::read_aligned_string(reader).map_err(|err| error::BffReadError::IoError(err))?;
     let _record_trailer: bff::RecordTrailer =
-        util::read_struct(reader).map_err(|err| BffReadError::IoError(err))?;
-    let record: Record = record_header.into();
+        util::read_struct(reader).map_err(|err| error::BffReadError::IoError(err))?;
+    let record: bff::Record = record_header.into();
     let target_path = out_dir.as_ref().join(&filename).normalize();
+
+    let num = record_header.unk3_c;
+    println!("{num:032b} {filename}");
 
     if verbose {
         println!("{}", target_path.display());
@@ -83,16 +86,16 @@ fn extract_file<R: Read + Seek, P: AsRef<Path>>(
         Some(FileType::Directory) => {
             if !target_path.exists() {
                 std::fs::create_dir_all(&target_path)
-                    .map_err(|err| BffExtractError::IoError(err))?;
+                    .map_err(|err| error::BffExtractError::IoError(err))?;
             }
         }
         _ => {
-            let target_dir = target_path.parent().ok_or(BffError::MissingParentDir(
+            let target_dir = target_path.parent().ok_or(error::BffError::MissingParentDir(
                 target_path.display().to_string(),
             ))?;
             if !target_dir.exists() {
                 std::fs::create_dir_all(&target_dir)
-                    .map_err(|err| BffExtractError::IoError(err))?;
+                    .map_err(|err| error::BffExtractError::IoError(err))?;
             }
 
             let decompress = record_header.magic == bff::HUFFMAN_MAGIC;
@@ -109,7 +112,7 @@ fn extract_file<R: Read + Seek, P: AsRef<Path>>(
                 FileTime::from_unix_time(record_header.atime as i64, 0),
                 FileTime::from_unix_time(record_header.mtime as i64, 0),
             )
-            .map_err(|err| BffExtractError::IoError(err))?;
+            .map_err(|err| error::BffExtractError::IoError(err))?;
         }
     }
 
@@ -118,17 +121,20 @@ fn extract_file<R: Read + Seek, P: AsRef<Path>>(
         FileTime::from_unix_time(record_header.atime as i64, 0),
         FileTime::from_unix_time(record_header.mtime as i64, 0),
     )
-    .map_err(|err| BffExtractError::IoError(err))?;
+    .map_err(|err| error::BffExtractError::IoError(err))?;
 
     #[cfg(unix)]
-    target_path.as_path().set_mode(record.mode.mode()).map_err(|err| BffExtractError::ModeError(Box::new(err)))?;
+    target_path
+        .as_path()
+        .set_mode(record.mode.mode())
+        .map_err(|err| error::BffExtractError::ModeError(Box::new(err)))?;
 
     let aligned_up = (record_header.compressed_size + 7) & !7;
     reader
         .seek(SeekFrom::Current(
             (aligned_up - record_header.compressed_size) as i64,
         ))
-        .map_err(|err| BffReadError::IoError(err))?;
+        .map_err(|err| error::BffReadError::IoError(err))?;
 
     Ok(())
 }
@@ -181,15 +187,15 @@ fn print_content<R: Read + Seek>(reader: &mut R, numeric: bool) {
     println!("{table}");
 }
 
-fn main() -> Result<(), BffError> {
+fn main() -> Result<(), error::BffError> {
     let args = Args::parse();
 
-    let reader = File::open(&args.filename).map_err(|err| BffReadError::IoError(err))?;
+    let reader = File::open(&args.filename).map_err(|err| error::BffReadError::IoError(err))?;
     if reader.metadata().unwrap().len() > 0xffffffff {
-        return Err(BffReadError::FileToBig.into());
+        return Err(error::BffReadError::FileToBig.into());
     }
     let mut reader = BufReader::new(reader);
-    read_file_header(&mut reader)?;
+    bff::read_file_header(&mut reader)?;
 
     if args.list {
         print_content(&mut reader, args.numeric);
@@ -198,9 +204,9 @@ fn main() -> Result<(), BffError> {
             match extract_file(&mut reader, &args.chdir, args.verbose) {
                 Err(e) => {
                     match e {
-                        BffError::BffReadError(ref read_error) => {
+                        error::BffError::BffReadError(ref read_error) => {
                             match read_error {
-                                BffReadError::IoError(io_error) => {
+                                error::BffReadError::IoError(io_error) => {
                                     if io_error.kind() == io::ErrorKind::UnexpectedEof {
                                         // Hopefully not unexpected EOF
                                         return Ok(());
@@ -208,16 +214,16 @@ fn main() -> Result<(), BffError> {
                                         return Err(e);
                                     }
                                 }
-                                BffReadError::EmptyFilename => eprintln!("{read_error}"),
-                                BffReadError::InvalidRecordMagic(_magic) => (),
+                                error::BffReadError::EmptyFilename => eprintln!("{read_error}"),
+                                error::BffReadError::InvalidRecordMagic(_magic) => (),
                                 _ => return Err(e),
                             }
                         }
-                        BffError::BffExtractError(ref extract_error) => match extract_error {
-                            BffExtractError::IoError(_io_error) => return Err(e),
-                            BffExtractError::ModeError(_mode_error) => eprintln!("{e}"),
+                        error::BffError::BffExtractError(ref extract_error) => match extract_error {
+                            error::BffExtractError::IoError(_io_error) => return Err(e),
+                            error::BffExtractError::ModeError(_mode_error) => eprintln!("{e}"),
                         },
-                        BffError::MissingParentDir(ref _path) => eprintln!("{e}"),
+                        error::BffError::MissingParentDir(ref _path) => eprintln!("{e}"),
                     }
                 }
                 _ => (),

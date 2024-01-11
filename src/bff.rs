@@ -1,12 +1,10 @@
 use chrono::prelude::*;
 use file_mode::Mode;
-use std::error::Error;
-use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use crate::{huffman, util};
+use crate::{error, huffman, util};
 
 pub const FILE_MAGIC: u32 = 0xea6b0009; //0x09006BEA;
 pub const HUFFMAN_MAGIC: u16 = 0xEA6C;
@@ -46,10 +44,10 @@ pub struct RecordHeader {
     pub atime: u32,
     pub mtime: u32,
     pub time24: u32,
-    pub unk28: u32, // always last bits: 1010 (10)
+    pub unk28: u32,  // always last bits: 1010 (10)
     pub unk2_c: u32, // always last bits: 111 (7)
-    pub unk30: u32, // always 0
-    pub unk34: u32, // always 0
+    pub unk30: u32,  // always 0
+    pub unk34: u32,  // always 0
     pub compressed_size: u32,
     pub unk3_c: u32, // always 0
 }
@@ -70,11 +68,11 @@ pub struct RecordTrailer {
 }
 
 /// Read BFF file header
-pub fn read_file_header<R: Read>(reader: &mut R) -> Result<FileHeader, BffReadError> {
+pub fn read_file_header<R: Read>(reader: &mut R) -> Result<FileHeader, error::BffReadError> {
     let file_header: FileHeader = util::read_struct(reader)?;
     if file_header.magic != FILE_MAGIC {
         let magic = file_header.magic;
-        return Err(BffReadError::InvalidFileMagic(magic));
+        return Err(error::BffReadError::InvalidFileMagic(magic));
     }
     Ok(file_header)
 }
@@ -104,18 +102,18 @@ pub fn extract_record<R: Read, P: AsRef<Path>>(
     size: usize,
     decompress: bool,
     target_path: P,
-) -> Result<(), BffError> {
+) -> Result<(), error::BffError> {
     if name.is_empty() {
-        return Err(BffReadError::EmptyFilename.into());
+        return Err(error::BffReadError::EmptyFilename.into());
     }
 
-    let writer = File::create(&target_path).map_err(|err| BffExtractError::IoError(err))?;
+    let writer = File::create(&target_path).map_err(|err| error::BffExtractError::IoError(err))?;
     let mut writer = BufWriter::new(writer);
     if decompress {
         huffman::decompress_stream(reader, &mut writer, size)?;
     } else {
         util::copy_stream(reader, &mut writer, size)
-            .map_err(|err| BffExtractError::IoError(err))?;
+            .map_err(|err| error::BffExtractError::IoError(err))?;
     }
     Ok(())
 }
@@ -133,7 +131,6 @@ pub struct Record {
     pub adate: NaiveDateTime,
     pub file_position: u32,
 }
-
 
 impl From<RecordHeader> for Record {
     fn from(value: RecordHeader) -> Self {
@@ -166,7 +163,7 @@ where
     }
 
     /// Read a single record from BFF stream and transform to a Record.
-    fn next_record(&mut self) -> Result<Record, BffReadError> {
+    fn next_record(&mut self) -> Result<Record, error::BffReadError> {
         let record_header: RecordHeader = util::read_struct(self.reader)?;
         let filename = read_aligned_string(self.reader)?;
         let _record_trailer: RecordTrailer = util::read_struct(self.reader)?;
@@ -201,108 +198,4 @@ where
 pub fn get_record_listing<R: Read + Seek>(reader: &mut R) -> impl Iterator<Item = Record> + '_ {
     let record_reader = RecordReader::new(reader);
     record_reader
-}
-
-#[derive(Debug)]
-pub enum BffError {
-    BffReadError(BffReadError),
-    BffExtractError(BffExtractError),
-    MissingParentDir(String),
-}
-
-impl Error for BffError {}
-
-impl From<BffReadError> for BffError {
-    fn from(value: BffReadError) -> Self {
-        BffError::BffReadError(value)
-    }
-}
-
-impl From<BffExtractError> for BffError {
-    fn from(value: BffExtractError) -> Self {
-        BffError::BffExtractError(value)
-    }
-}
-
-impl Display for BffError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BffError::BffExtractError(e) => write!(f, "Failed to extract BFF file: {e}"),
-            BffError::BffReadError(e) => write!(f, "Failed to read BFF file: {e}"),
-            BffError::MissingParentDir(path) => write!(f, "Directory is impossible: {path}"),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum BffReadError {
-    IoError(std::io::Error),
-    InvalidFileMagic(u32),
-    InvalidRecordMagic(u16),
-    EmptyFilename,
-    BadSymbolTable,
-    InvalidLevelIndex,
-    InvalidTreelevel,
-    FileToBig,
-}
-
-#[derive(Debug)]
-pub enum BffExtractError {
-    IoError(std::io::Error),
-    #[allow(dead_code)]
-    ModeError(Box<dyn Error>),
-}
-
-impl Error for BffReadError {}
-impl Error for BffExtractError {}
-
-impl Display for BffReadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BffReadError::BadSymbolTable => write!(f, "Invalid file format: Bad symbol table."),
-            BffReadError::EmptyFilename => {
-                write!(f, "Record having an empty filename will be skipped.")
-            }
-            BffReadError::FileToBig => write!(f, "The file size is to big. Has to be max 4 GiB."),
-            BffReadError::InvalidFileMagic(magic) => write!(
-                f,
-                "Invalid file format: File has an invalid magic number '{magic}'."
-            ),
-            BffReadError::InvalidLevelIndex => {
-                write!(f, "Invalid file format: Invalid level index found.")
-            }
-            BffReadError::InvalidRecordMagic(magic) => write!(
-                f,
-                "Invalid file format: Record has an invalid magic number '{magic}'."
-            ),
-            BffReadError::InvalidTreelevel => {
-                write!(f, "Invalid file format: Invalid tree levels.")
-            }
-            BffReadError::IoError(io_error) => write!(f, "{io_error}"),
-        }
-    }
-}
-impl Display for BffExtractError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BffExtractError::IoError(io_error) => {
-                write!(f, "Failed to extract BFF file: {io_error}")
-            },
-            BffExtractError::ModeError(mode_error) => {
-                write!(f, "Failed to set file modes: {mode_error}")
-            }
-        }
-    }
-}
-
-impl From<std::io::Error> for BffReadError {
-    fn from(value: std::io::Error) -> Self {
-        BffReadError::IoError(value)
-    }
-}
-
-impl From<std::io::Error> for BffExtractError {
-    fn from(value: std::io::Error) -> Self {
-        BffExtractError::IoError(value)
-    }
 }
