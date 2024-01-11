@@ -46,12 +46,12 @@ pub struct RecordHeader {
     pub atime: u32,
     pub mtime: u32,
     pub time24: u32,
-    pub unk28: u32,
-    pub unk2_c: u32,
-    pub unk30: u32,
-    pub unk34: u32,
+    pub unk28: u32, // always last bits: 1010 (10)
+    pub unk2_c: u32, // always last bits: 111 (7)
+    pub unk30: u32, // always 0
+    pub unk34: u32, // always 0
     pub compressed_size: u32,
-    pub unk3_c: u32,
+    pub unk3_c: u32, // always 0
 }
 
 #[repr(C, packed)]
