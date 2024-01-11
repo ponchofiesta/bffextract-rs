@@ -116,19 +116,12 @@ fn print_content<R: Read + Seek>(reader: &mut R) {
         "Size", "UID", "GID", "Modified", "Filename",
     ]));
     table.load_preset(presets::NOTHING);
+    let user_data = util::UserData::new();
     bff::get_record_listing(reader).for_each(|item| {
-        let size = if item.size == 0 {
-            0
-        } else if item.size < 1024 {
-            1
-        } else {
-            item.size / 1024
-        };
-
         table.add_row(vec![
-            format!("{}", size),
-            format!("{}", item.uid),
-            format!("{}", item.gid),
+            format!("{}", item.size),
+            user_data.get_username_by_uid(item.uid).unwrap_or(format!("{}", item.uid)),
+            user_data.get_groupname_by_gid(item.gid).unwrap_or(format!("{}", item.gid)),
             item.mdate.format(date_format).to_string(),
             item.filename,
         ]);
