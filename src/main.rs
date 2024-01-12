@@ -75,9 +75,6 @@ fn extract_file<R: Read + Seek, P: AsRef<Path>>(
     let record: bff::Record = record_header.into();
     let target_path = out_dir.as_ref().join(&filename).normalize();
 
-    let num = record_header.unk3_c;
-    println!("{num:032b} {filename}");
-
     if verbose {
         println!("{}", target_path.display());
     }
@@ -107,12 +104,6 @@ fn extract_file<R: Read + Seek, P: AsRef<Path>>(
                 decompress,
                 &target_path,
             )?;
-            set_file_times(
-                &target_path,
-                FileTime::from_unix_time(record_header.atime as i64, 0),
-                FileTime::from_unix_time(record_header.mtime as i64, 0),
-            )
-            .map_err(|err| error::BffExtractError::IoError(err))?;
         }
     }
 
