@@ -18,10 +18,7 @@ use std::{
 };
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "BFFextract",
-    about = "Extract content of BFF file (AIX Backup file format)."
-)]
+#[command(about, version, author)]
 struct Args {
     #[arg(help = "Extract to directory.")]
     filename: String,
