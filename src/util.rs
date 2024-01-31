@@ -36,7 +36,7 @@ pub struct UserData;
 
 #[cfg(not(windows))]
 pub struct UserData {
-    cache: UsersCache,
+    cache: Users,
 }
 
 #[cfg(windows)]
@@ -63,6 +63,10 @@ impl UserData {
         }
     }
 
+    pub fn with_users(users: Users) -> Self {
+        Self { cache: users }
+    }
+
     pub fn get_username_by_uid(&self, uid: u32) -> Option<String> {
         self.cache
             .get_user_by_uid(uid)
@@ -73,5 +77,56 @@ impl UserData {
         self.cache
             .get_group_by_gid(gid)
             .and_then(|group| group.name().to_os_string().into_string().ok())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mockall::predicate::*;
+    use mockall::*;
+    use std::io::Cursor;
+
+    #[cfg(not(windows))]
+    use users::Users;
+
+    use super::*;
+
+    #[derive(Debug, PartialEq)]
+    #[repr(C, packed)]
+    struct ReadStruct {
+        pub a: u32,
+        pub b: u16,
+        pub c: u32,
+    }
+
+    #[test]
+    fn copy_stream_has_correct_size() -> Result<()> {
+        let mut stream = Cursor::new(b"abcdefghijklmnopqrstuvwxyz");
+        let mut result: Vec<u8> = vec![];
+
+        copy_stream(&mut stream, &mut result, 5)?;
+
+        assert_eq!(result, b"abcde");
+        Ok(())
+    }
+
+    #[test]
+    fn read_struct_has_correct_fields() -> Result<()> {
+        let mut stream = Cursor::new(b"\x01\x00\x00\x00\x02\x00\x03\x00\x00\x00\x10\x11");
+
+        let result = read_struct::<Cursor<_>, ReadStruct>(&mut stream)?;
+
+        let expected = ReadStruct { a: 1, b: 2, c: 3 };
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn user_data() {
+        impl Users for UserData {
+            
+        }
     }
 }
