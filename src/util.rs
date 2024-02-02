@@ -36,7 +36,7 @@ pub struct UserData;
 
 #[cfg(not(windows))]
 pub struct UserData {
-    cache: Users,
+    cache: UsersCache,
 }
 
 #[cfg(windows)]
@@ -63,10 +63,6 @@ impl UserData {
         }
     }
 
-    pub fn with_users(users: Users) -> Self {
-        Self { cache: users }
-    }
-
     pub fn get_username_by_uid(&self, uid: u32) -> Option<String> {
         self.cache
             .get_user_by_uid(uid)
@@ -82,12 +78,7 @@ impl UserData {
 
 #[cfg(test)]
 mod tests {
-    use mockall::predicate::*;
-    use mockall::*;
     use std::io::Cursor;
-
-    #[cfg(not(windows))]
-    use users::Users;
 
     use super::*;
 
@@ -120,13 +111,5 @@ mod tests {
         assert_eq!(result, expected);
 
         Ok(())
-    }
-
-    #[test]
-    #[cfg(not(windows))]
-    fn user_data() {
-        impl Users for UserData {
-            
-        }
     }
 }

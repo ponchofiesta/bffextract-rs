@@ -47,6 +47,8 @@ jobs:
     - name: Install MUSL
       if: matrix.os == 'ubuntu-20.04'
       run: rustup target add x86_64-unknown-linux-musl
+    - name: Test
+      run: cargo test
     - name: Build
       run: ${{ matrix.build }}
     - name: Pack
