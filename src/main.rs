@@ -72,6 +72,12 @@ fn extract_file<R: Read + Seek, P: AsRef<Path>>(
     let record: bff::Record = record_header.into();
     let target_path = out_dir.as_ref().join(&filename).normalize();
 
+    if let Some(path) = target_path.to_str() {
+        if path == "" {
+            return Ok(());
+        }
+    }
+
     if verbose {
         println!("{}", target_path.display());
     }
