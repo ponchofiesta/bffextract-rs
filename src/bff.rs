@@ -96,23 +96,25 @@ pub fn read_aligned_string<R: Read>(reader: &mut R) -> Result<String, std::io::E
 }
 
 /// Read date from stream and write to file.
-pub fn extract_record<R: Read, P: AsRef<Path>>(
+pub fn extract_record<R: Read + Seek, P: AsRef<Path>>(
     reader: &mut R,
-    name: &str,
-    size: usize,
-    decompress: bool,
+    record: &Record,
     target_path: P,
 ) -> Result<(), error::BffError> {
-    if name.is_empty() {
+    if record.filename.is_empty() {
         return Err(error::BffReadError::EmptyFilename.into());
     }
 
     let writer = File::create(&target_path).map_err(|err| error::BffExtractError::IoError(err))?;
     let mut writer = BufWriter::new(writer);
-    if decompress {
-        huffman::decompress_stream(reader, &mut writer, size)?;
+    reader
+        .seek(SeekFrom::Start(record.file_position as u64))
+        .unwrap();
+
+    if record.magic == HUFFMAN_MAGIC {
+        huffman::decompress_stream(reader, &mut writer, record.compressed_size as usize)?;
     } else {
-        util::copy_stream(reader, &mut writer, size)
+        util::copy_stream(reader, &mut writer, record.compressed_size as usize)
             .map_err(|err| error::BffExtractError::IoError(err))?;
     }
     Ok(())
@@ -130,6 +132,7 @@ pub struct Record {
     pub mdate: NaiveDateTime,
     pub adate: NaiveDateTime,
     pub file_position: u32,
+    pub magic: u16,
 }
 
 impl From<RecordHeader> for Record {
@@ -146,6 +149,7 @@ impl From<RecordHeader> for Record {
             adate: NaiveDateTime::from_timestamp_opt(value.atime as i64, 0)
                 .unwrap_or_else(|| Utc::now().naive_local()),
             file_position: 0,
+            magic: value.magic,
         }
     }
 }
