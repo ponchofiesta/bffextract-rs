@@ -33,7 +33,8 @@ pub struct FileHeader {
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone)]
 pub struct RecordHeader {
-    pub unk00: u16,
+    pub unk00: u8, // Directories seems to have 0x0D, files found having 0x0F, 0x10, 0x11, 0x12; lpp_name has 0x0A
+    pub unk01: u8, // typical record has 0x0B, some offset data found having 0x07
     pub magic: u16,
     pub unk04: u32,
     pub unk08: u32, // maybe directory ID or counter, always 0 for files
@@ -169,6 +170,13 @@ where
     /// Read a single record from BFF stream and transform to a Record.
     fn next_record(&mut self) -> Result<Record, error::BffReadError> {
         let record_header: RecordHeader = util::read_struct(self.reader)?;
+        if record_header.unk01 != 0x0b {
+            return Err(error::BffReadError::InvalidRecord);
+        }
+        let magic = record_header.magic;
+        if !HEADER_MAGICS.contains(&magic) {
+            return Err(error::BffReadError::InvalidRecordMagic(record_header.magic));
+        }
         let filename = read_aligned_string(self.reader)?;
         let _record_trailer: RecordTrailer = util::read_struct(self.reader)?;
         let position = self.reader.seek(SeekFrom::Current(0)).unwrap();

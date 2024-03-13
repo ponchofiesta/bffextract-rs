@@ -37,6 +37,7 @@ pub enum BffReadError {
     IoError(std::io::Error),
     InvalidFileMagic(u32),
     InvalidRecordMagic(u16),
+    InvalidRecord,
     EmptyFilename,
     BadSymbolTable,
     InvalidLevelIndex,
@@ -74,6 +75,7 @@ impl Display for BffReadError {
                 f,
                 "Invalid file format: Record has an invalid magic number '{magic}'."
             ),
+            BffReadError::InvalidRecord => write!(f, "Invalid or unsupported record found."),
             BffReadError::InvalidTreelevel => {
                 write!(f, "Invalid file format: Invalid tree levels.")
             }
