@@ -1,6 +1,6 @@
 [package]
 name = "bffextract"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 authors = ["Michael Richter <mr@osor.de>"]
 description = "Extract content of BFF file (AIX Backup file format)"
