@@ -1,10 +1,14 @@
 use std::error::Error;
 use std::fmt::Display;
 
+/// General error wrapping more specific errors.
 #[derive(Debug)]
 pub enum BffError {
+    /// A read error occured.
     BffReadError(BffReadError),
+    /// Typically a write error occured while extracting files. But may also contain a read error.
     BffExtractError(BffExtractError),
+    /// The record has no parent directory. This should never occur.
     MissingParentDir(String),
 }
 
@@ -32,22 +36,35 @@ impl Display for BffError {
     }
 }
 
+/// Errors when reading BFF file.
 #[derive(Debug)]
 pub enum BffReadError {
+    /// `std::io:error` occured.
     IoError(std::io::Error),
+    /// The file had an invalid magic number. Provides the magic number read.
     InvalidFileMagic(u32),
+    /// An record had an invalid magic number. Provides the magic number read.
     InvalidRecordMagic(u16),
+    /// The record was invalid. This also may indicate some unsupported features.
     InvalidRecord,
+    /// The record had an empty file name.
     EmptyFilename,
+    /// The decoding table of the record is invalid.
     BadSymbolTable,
+    /// The decoding table of the record is invalid.
     InvalidLevelIndex,
+    /// The decoding table of the record is invalid.
     InvalidTreelevel,
+    /// File size is bigger than 4 GiB. Actually the lib doesn't support larger files.
     FileToBig,
 }
 
+/// Errors when extracting BFF file, especially when writing its content.
 #[derive(Debug)]
 pub enum BffExtractError {
+    /// Some generic IO error occured. Mosly a write error but may also be a read error.
     IoError(std::io::Error),
+    /// File system entry mode could not be set. Typically should contain a `std::io::error`.
     #[allow(dead_code)]
     ModeError(Box<dyn Error>),
 }

@@ -1,12 +1,18 @@
-use std::io::{Read, Write};
+//! Decoding of compressed BFF record data
 
 use crate::error;
+use std::io::{Read, Write};
 
-pub struct HuffmanDecompressor {
+/// Huffman decompression of a single record data
+struct HuffmanDecompressor {
+    /// Amount of bytes read while decompressing
     total_read: usize,
+    /// Amount of Huffman tree levels
     treelevels: usize,
     inodesin: Vec<u8>,
+    /// Symbols read
     symbolsin: Vec<u8>,
+    /// Huffman tree
     tree: Vec<Vec<u8>>,
     symbol_size: usize,
     size: usize,
@@ -25,6 +31,9 @@ impl HuffmanDecompressor {
         }
     }
 
+    /// Decompress data of a record.
+    ///
+    /// Reads a maximum amount of bytes defined by `size` from `reader` and extracts to `writer`.
     fn decompress_stream<R: Read, W: Write>(
         &mut self,
         reader: &mut R,
@@ -37,6 +46,7 @@ impl HuffmanDecompressor {
         Ok(())
     }
 
+    /// Read and parse the data header. Creates the symbol table and the Huffman tree.
     fn parse_header<R: Read>(&mut self, reader: &mut R) -> Result<(), error::BffError> {
         let mut buffer = vec![0; 1];
         reader
@@ -94,6 +104,7 @@ impl HuffmanDecompressor {
         }
     }
 
+    /// Decode the compressed data after the tree and symbol table was created.
     fn decode<R: Read, W: Write>(
         &mut self,
         reader: &mut R,
@@ -138,6 +149,9 @@ impl HuffmanDecompressor {
     }
 }
 
+/// Decompress a single record data
+///
+/// Reads a maximum amount of bytes defined by `size` from `reader` and extracts to `writer`.
 pub fn decompress_stream<R: Read, W: Write>(
     reader: &mut R,
     writer: &mut W,

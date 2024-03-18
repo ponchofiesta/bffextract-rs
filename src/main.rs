@@ -1,21 +1,19 @@
-mod bff;
-mod error;
-mod huffman;
-mod util;
+pub mod bff;
+pub mod error;
+pub mod huffman;
+pub mod util;
 
-use bff::get_record_listing;
+use crate::bff::{extract_file, get_record_listing, read_file_header};
+use crate::error::{BffError, BffExtractError, BffReadError};
+use crate::util::UserData;
 use clap::Parser;
 use comfy_table::{presets, CellAlignment, Row, Table};
-use file_mode::FileType;
 #[cfg(unix)]
 use file_mode::ModePath;
-use filetime::{set_file_times, FileTime};
-use normalize_path::NormalizePath;
 use std::io::{self, BufReader};
 use std::{
     fs::File,
     io::{Read, Seek},
-    path::Path,
 };
 
 #[derive(Parser, Debug)]
@@ -52,63 +50,6 @@ struct Args {
     numeric: bool,
 }
 
-/// Extract single file from stream to target directory.
-fn extract_file<R: Read + Seek, P: AsRef<Path>>(
-    reader: &mut R,
-    record: bff::Record,
-    out_dir: P,
-    verbose: bool,
-) -> Result<(), error::BffError> {
-    let target_path = out_dir.as_ref().join(&record.filename).normalize();
-
-    if let Some(path) = target_path.to_str() {
-        if path == "" {
-            return Ok(());
-        }
-    }
-
-    if verbose {
-        println!("{}", target_path.display());
-    }
-
-    match record.mode.file_type() {
-        Some(FileType::Directory) => {
-            if !target_path.exists() {
-                std::fs::create_dir_all(&target_path)
-                    .map_err(|err| error::BffExtractError::IoError(err))?;
-            }
-        }
-        _ => {
-            let target_dir = target_path
-                .parent()
-                .ok_or(error::BffError::MissingParentDir(
-                    target_path.display().to_string(),
-                ))?;
-            if !target_dir.exists() {
-                std::fs::create_dir_all(&target_dir)
-                    .map_err(|err| error::BffExtractError::IoError(err))?;
-            }
-
-            bff::extract_record(reader, &record, &target_path)?;
-        }
-    }
-
-    set_file_times(
-        &target_path,
-        FileTime::from_unix_time(record.adate.timestamp(), 0),
-        FileTime::from_unix_time(record.mdate.timestamp(), 0),
-    )
-    .map_err(|err| error::BffExtractError::IoError(err))?;
-
-    #[cfg(unix)]
-    target_path
-        .as_path()
-        .set_mode(record.mode.mode())
-        .map_err(|err| error::BffExtractError::ModeError(Box::new(err)))?;
-
-    Ok(())
-}
-
 /// Print content of BFF file for CLI output
 fn print_content<R: Read + Seek>(reader: &mut R, numeric: bool) {
     let date_format = "%Y-%m-%d %H:%M:%S";
@@ -130,24 +71,28 @@ fn print_content<R: Read + Seek>(reader: &mut R, numeric: bool) {
         .unwrap()
         .set_cell_alignment(CellAlignment::Right);
 
-    let user_data = util::UserData::new();
-    bff::get_record_listing(reader).for_each(|item| {
+    let user_data = UserData::new();
+    get_record_listing(reader).for_each(|item| {
+        let username = if numeric {
+            format!("{}", item.uid)
+        } else {
+            user_data
+                .get_username_by_uid(item.uid)
+                .unwrap_or(format!("{}", item.uid))
+        };
+        
+        let groupname = if numeric {
+            format!("{}", item.gid)
+        } else {
+            user_data
+                .get_groupname_by_gid(item.gid)
+                .unwrap_or(format!("{}", item.gid))
+        };
+
         table.add_row(vec![
             format!("{}", item.mode),
-            if numeric {
-                format!("{}", item.uid)
-            } else {
-                user_data
-                    .get_username_by_uid(item.uid)
-                    .unwrap_or(format!("{}", item.uid))
-            },
-            if numeric {
-                format!("{}", item.gid)
-            } else {
-                user_data
-                    .get_groupname_by_gid(item.gid)
-                    .unwrap_or(format!("{}", item.gid))
-            },
+            username,
+            groupname,
             format!("{}", item.size),
             item.mdate.format(date_format).to_string(),
             item.filename,
@@ -157,15 +102,15 @@ fn print_content<R: Read + Seek>(reader: &mut R, numeric: bool) {
     println!("{table}");
 }
 
-fn main() -> Result<(), error::BffError> {
+fn main() -> Result<(), BffError> {
     let args = Args::parse();
 
-    let reader = File::open(&args.filename).map_err(|err| error::BffReadError::IoError(err))?;
+    let reader = File::open(&args.filename).map_err(|err| BffReadError::IoError(err))?;
     if reader.metadata().unwrap().len() > 0xffffffff {
-        return Err(error::BffReadError::FileToBig.into());
+        return Err(BffReadError::FileToBig.into());
     }
     let mut reader = BufReader::new(reader);
-    bff::read_file_header(&mut reader)?;
+    read_file_header(&mut reader)?;
 
     if args.list {
         print_content(&mut reader, args.numeric);
@@ -175,9 +120,9 @@ fn main() -> Result<(), error::BffError> {
             match extract_file(&mut reader, record, &args.chdir, args.verbose) {
                 Err(e) => {
                     match e {
-                        error::BffError::BffReadError(ref read_error) => {
+                        BffError::BffReadError(ref read_error) => {
                             match read_error {
-                                error::BffReadError::IoError(io_error) => {
+                                BffReadError::IoError(io_error) => {
                                     if io_error.kind() == io::ErrorKind::UnexpectedEof {
                                         // Hopefully not unexpected EOF
                                         return Ok(());
@@ -185,18 +130,16 @@ fn main() -> Result<(), error::BffError> {
                                         return Err(e);
                                     }
                                 }
-                                error::BffReadError::EmptyFilename => eprintln!("{read_error}"),
-                                error::BffReadError::InvalidRecordMagic(_magic) => (),
+                                BffReadError::EmptyFilename => eprintln!("{read_error}"),
+                                BffReadError::InvalidRecordMagic(_magic) => (),
                                 _ => return Err(e),
                             }
                         }
-                        error::BffError::BffExtractError(ref extract_error) => {
-                            match extract_error {
-                                error::BffExtractError::IoError(_io_error) => return Err(e),
-                                error::BffExtractError::ModeError(_mode_error) => eprintln!("{e}"),
-                            }
-                        }
-                        error::BffError::MissingParentDir(ref _path) => eprintln!("{e}"),
+                        BffError::BffExtractError(ref extract_error) => match extract_error {
+                            BffExtractError::IoError(_io_error) => return Err(e),
+                            BffExtractError::ModeError(_mode_error) => eprintln!("{e}"),
+                        },
+                        BffError::MissingParentDir(ref _path) => eprintln!("{e}"),
                     }
                 }
                 _ => (),

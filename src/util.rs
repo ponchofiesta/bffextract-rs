@@ -4,11 +4,10 @@ use std::{
     cmp::min,
     io::{Read, Result, Write},
 };
-
 #[cfg(not(windows))]
 use users::{Groups, Users, UsersCache};
 
-/// Read defined size of reader stream and copy to writer stream.
+/// Read defined `size` of `reader` stream and copy to `writer` stream.
 pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W, size: usize) -> Result<()> {
     const BUF_SIZE: usize = 1024;
     let mut total = 0;
@@ -23,7 +22,9 @@ pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W, size: usiz
     Ok(())
 }
 
-pub fn read_struct<R: Read, T: Sized>(reader: &mut R) -> Result<T> {
+/// Read binary data from a stream `reader` and map the bytes on the resulting
+/// struct. Target struct needs to be packed.
+pub(crate) fn read_struct<R: Read, T: Sized>(reader: &mut R) -> Result<T> {
     let mut obj: T = unsafe { mem::zeroed() };
     let size = mem::size_of::<T>();
     let buffer_slice = unsafe { from_raw_parts_mut(&mut obj as *mut _ as *mut u8, size) };
@@ -31,14 +32,17 @@ pub fn read_struct<R: Read, T: Sized>(reader: &mut R) -> Result<T> {
     Ok(obj)
 }
 
+/// Helper to implement different user data retrivals by target OS.
 #[cfg(windows)]
-pub struct UserData;
+pub(crate) struct UserData;
 
+/// Helper to implement different user data retrivals by target OS.
 #[cfg(not(windows))]
-pub struct UserData {
+pub(crate) struct UserData {
     cache: UsersCache,
 }
 
+/// On non-Windows return the UNIX specific user data. On Windows always return `None`.
 #[cfg(windows)]
 impl UserData {
     pub fn new() -> Self {
@@ -55,6 +59,7 @@ impl UserData {
     }
 }
 
+/// On non-Windows return the UNIX specific user data. On Windows always return `None`.
 #[cfg(not(windows))]
 impl UserData {
     pub fn new() -> Self {
