@@ -1,5 +1,7 @@
 use crate::{error, huffman, util};
 use chrono::prelude::*;
+#[cfg(unix)]
+use file_mode::ModePath;
 use file_mode::{FileType, Mode};
 use filetime::{set_file_times, FileTime};
 use normalize_path::NormalizePath;
@@ -80,7 +82,7 @@ pub struct RecordHeader {
 }
 
 /// Represntation of the data after each record header and record file name.
-/// 
+///
 /// Some data is not identified at the moment and named "unk*"
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone)]

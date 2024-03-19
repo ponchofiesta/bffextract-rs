@@ -1,3 +1,5 @@
+//! bffextract CLI tool to extract or list content of BFF files (Backup File Format).
+
 pub mod bff;
 pub mod error;
 pub mod huffman;
@@ -5,17 +7,17 @@ pub mod util;
 
 use crate::bff::{extract_file, get_record_listing, read_file_header};
 use crate::error::{BffError, BffExtractError, BffReadError};
-use crate::util::UserData;
 use clap::Parser;
 use comfy_table::{presets, CellAlignment, Row, Table};
-#[cfg(unix)]
-use file_mode::ModePath;
 use std::io::{self, BufReader};
 use std::{
     fs::File,
     io::{Read, Seek},
 };
+#[cfg(not(windows))]
+use users::{Groups, Users, UsersCache};
 
+/// Definition of command line arguments
 #[derive(Parser, Debug)]
 #[command(about, version, author)]
 struct Args {
@@ -50,6 +52,55 @@ struct Args {
     numeric: bool,
 }
 
+/// Helper to implement different user data retrivals by target OS.
+#[cfg(windows)]
+struct UserData;
+
+/// Helper to implement different user data retrivals by target OS.
+#[cfg(not(windows))]
+struct UserData {
+    cache: UsersCache,
+}
+
+/// On non-Windows return the UNIX specific user data. On Windows always return `None`.
+#[cfg(windows)]
+impl UserData {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn get_username_by_uid(&self, _uid: u32) -> Option<String> {
+        None
+    }
+
+    #[cfg(windows)]
+    pub fn get_groupname_by_gid(&self, _gid: u32) -> Option<String> {
+        None
+    }
+}
+
+/// On non-Windows return the UNIX specific user data. On Windows always return `None`.
+#[cfg(not(windows))]
+impl UserData {
+    pub fn new() -> Self {
+        Self {
+            cache: UsersCache::new(),
+        }
+    }
+
+    pub fn get_username_by_uid(&self, uid: u32) -> Option<String> {
+        self.cache
+            .get_user_by_uid(uid)
+            .and_then(|user| user.name().to_os_string().into_string().ok())
+    }
+
+    pub fn get_groupname_by_gid(&self, gid: u32) -> Option<String> {
+        self.cache
+            .get_group_by_gid(gid)
+            .and_then(|group| group.name().to_os_string().into_string().ok())
+    }
+}
+
 /// Print content of BFF file for CLI output
 fn print_content<R: Read + Seek>(reader: &mut R, numeric: bool) {
     let date_format = "%Y-%m-%d %H:%M:%S";
@@ -80,7 +131,7 @@ fn print_content<R: Read + Seek>(reader: &mut R, numeric: bool) {
                 .get_username_by_uid(item.uid)
                 .unwrap_or(format!("{}", item.uid))
         };
-        
+
         let groupname = if numeric {
             format!("{}", item.gid)
         } else {
@@ -118,6 +169,7 @@ fn main() -> Result<(), BffError> {
         let records: Vec<_> = get_record_listing(&mut reader).collect();
         for record in records {
             match extract_file(&mut reader, record, &args.chdir, args.verbose) {
+                // TODO: Error handling should be opimized
                 Err(e) => {
                     match e {
                         BffError::BffReadError(ref read_error) => {

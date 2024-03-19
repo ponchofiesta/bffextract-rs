@@ -4,8 +4,6 @@ use std::{
     cmp::min,
     io::{Read, Result, Write},
 };
-#[cfg(not(windows))]
-use users::{Groups, Users, UsersCache};
 
 /// Read defined `size` of `reader` stream and copy to `writer` stream.
 pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W, size: usize) -> Result<()> {
@@ -30,55 +28,6 @@ pub(crate) fn read_struct<R: Read, T: Sized>(reader: &mut R) -> Result<T> {
     let buffer_slice = unsafe { from_raw_parts_mut(&mut obj as *mut _ as *mut u8, size) };
     reader.read_exact(buffer_slice)?;
     Ok(obj)
-}
-
-/// Helper to implement different user data retrivals by target OS.
-#[cfg(windows)]
-pub(crate) struct UserData;
-
-/// Helper to implement different user data retrivals by target OS.
-#[cfg(not(windows))]
-pub(crate) struct UserData {
-    cache: UsersCache,
-}
-
-/// On non-Windows return the UNIX specific user data. On Windows always return `None`.
-#[cfg(windows)]
-impl UserData {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn get_username_by_uid(&self, _uid: u32) -> Option<String> {
-        None
-    }
-
-    #[cfg(windows)]
-    pub fn get_groupname_by_gid(&self, _gid: u32) -> Option<String> {
-        None
-    }
-}
-
-/// On non-Windows return the UNIX specific user data. On Windows always return `None`.
-#[cfg(not(windows))]
-impl UserData {
-    pub fn new() -> Self {
-        Self {
-            cache: UsersCache::new(),
-        }
-    }
-
-    pub fn get_username_by_uid(&self, uid: u32) -> Option<String> {
-        self.cache
-            .get_user_by_uid(uid)
-            .and_then(|user| user.name().to_os_string().into_string().ok())
-    }
-
-    pub fn get_groupname_by_gid(&self, gid: u32) -> Option<String> {
-        self.cache
-            .get_group_by_gid(gid)
-            .and_then(|group| group.name().to_os_string().into_string().ok())
-    }
 }
 
 #[cfg(test)]
