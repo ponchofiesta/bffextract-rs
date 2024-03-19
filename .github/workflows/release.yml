@@ -54,7 +54,7 @@ jobs:
     - name: Pack
       run: ${{ matrix.pack }}
     - name: Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: ${{ matrix.asset_name }}
       env:
