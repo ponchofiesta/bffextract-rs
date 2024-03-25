@@ -6,7 +6,7 @@ Simple Rust program to extract AIX BFF files.
 
 ### Cargo
 
-To comppile it from source you can just install it using cargo install.
+To compile it from source you can just install it using cargo install.
 
 ```
 cargo install bffextract

@@ -1,33 +1,25 @@
-[package]
-name = "bffextract"
-version = "0.5.0"
+[workspace]
+members = [
+    "bfflib",
+    "bffextract",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.6.0"
 edition = "2021"
 authors = ["Michael Richter <mr@osor.de>"]
 description = "Extract content of BFF file (AIX Backup file format)"
 readme = "README.md"
 repository = "https://github.com/ponchofiesta/bffextract-rs"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 keywords = ["bff", "aix", "extract", "unpack", "decompress"]
-categories = ["command-line-utilities", "compression"]
 
-[[bin]]
-name = "bffextract"
-path = "src/main.rs"
-
-[lib]
-name = "bffextract"
-path = "src/lib.rs"
-
-[dependencies]
+[workspace.dependencies]
 chrono = { version = "0.4.35", default-features = false, features = ["now"] }
-clap = { version = "4.5.3", features = ["derive"] }
+clap = { version = "4.5.3", default-features = false, features = ["derive", "std"] }
 comfy-table = { version = "7.1.0", default-features = false }
 file-mode = "0.1.2"
 filetime = "0.2.23"
 normalize-path = "0.2.1"
-
-[target.'cfg(unix)'.dependencies]
 users = { version = "0.11.0", default-features = false, features = ["cache"] }
-
-[dev-dependencies]
-mockall = "0.12.1"

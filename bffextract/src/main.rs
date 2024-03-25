@@ -1,17 +1,19 @@
+//! [![github]](https://github.com/ponchofiesta/bffextract-rs)&ensp;[![crates-io]](https://crates.io/crates/bffextract)&ensp;[![docs-rs]](https://docs.rs/bffextract)
+//!
+//! [github]: https://img.shields.io/badge/github-8da0cb?style=for-the-badge&labelColor=555555&logo=github
+//! [crates-io]: https://img.shields.io/badge/crates.io-fc8d62?style=for-the-badge&labelColor=555555&logo=rust
+//! [docs-rs]: https://img.shields.io/badge/docs.rs-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs
+//!
+//! <br>
+//!
 //! bffextract CLI tool to extract or list content of BFF files (Backup File Format).
 
-pub mod bff;
-pub mod error;
-pub mod huffman;
-pub mod util;
-
-use crate::bff::{extract_file, get_record_listing, read_file_header};
-use crate::error::{BffError, BffExtractError, BffReadError};
-use bff::Record;
+use bfflib::archive::{Archive, Record};
+use bfflib::{Error, Result};
 use clap::Parser;
 use comfy_table::{presets, CellAlignment, Row, Table};
-use std::io::{self, BufReader};
-use std::path::PathBuf;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::{
     fs::File,
     io::{Read, Seek},
@@ -107,54 +109,62 @@ impl UserData {
 }
 
 /// Print content of BFF file for CLI output
-fn print_content<I>(records: I, numeric: bool)
-where
-    I: IntoIterator<Item = Record>,
-{
+fn print_content<R: Read + Seek, P: AsRef<Path>>(
+    archive: &mut Archive<R>,
+    filter_list: &[P],
+    numeric: bool,
+) {
     let date_format = "%Y-%m-%d %H:%M:%S";
     let mut table = Table::new();
     table.set_header(Row::from(vec![
         "Mode", "UID", "GID", "Size", "Modified", "Filename",
     ]));
+    // Disable all table borders
     table.load_preset(presets::NOTHING);
-    table
-        .column_mut(1)
-        .unwrap()
-        .set_cell_alignment(CellAlignment::Right);
-    table
-        .column_mut(2)
-        .unwrap()
-        .set_cell_alignment(CellAlignment::Right);
-    table
-        .column_mut(3)
-        .unwrap()
-        .set_cell_alignment(CellAlignment::Right);
+    // Set columns right aligned
+    [1, 2, 3].iter().for_each(|&col| {
+        table
+            .column_mut(col)
+            .unwrap()
+            .set_cell_alignment(CellAlignment::Right)
+    });
 
     let user_data = UserData::new();
+    let records: Vec<&Record> = archive
+        .records()
+        .iter()
+        .filter(|record| {
+            filter_list.is_empty()
+                || filter_list
+                    .iter()
+                    .any(|inc_path| record.filename().starts_with(inc_path))
+        })
+        .map(|&record| record)
+        .collect();
     for record in records {
         let username = if numeric {
-            format!("{}", record.uid)
+            format!("{}", record.uid())
         } else {
             user_data
-                .get_username_by_uid(record.uid)
-                .unwrap_or(format!("{}", record.uid))
+                .get_username_by_uid(record.uid())
+                .unwrap_or(format!("{}", record.uid()))
         };
 
         let groupname = if numeric {
-            format!("{}", record.gid)
+            format!("{}", record.gid())
         } else {
             user_data
-                .get_groupname_by_gid(record.gid)
-                .unwrap_or(format!("{}", record.gid))
+                .get_groupname_by_gid(record.gid())
+                .unwrap_or(format!("{}", record.gid()))
         };
 
         table.add_row(vec![
-            format!("{}", record.mode),
+            format!("{}", record.mode()),
             username,
             groupname,
-            format!("{}", record.size),
-            record.mdate.format(date_format).to_string(),
-            record.filename.to_string_lossy().to_string(),
+            format!("{}", record.size()),
+            record.mdate().format(date_format).to_string(),
+            record.filename().to_string_lossy().to_string(),
         ]);
     }
 
@@ -162,74 +172,46 @@ where
 }
 
 /// Extract all selected records
-fn extract_records<R, I>(reader: &mut R, records: I, args: Args) -> Result<(), BffError>
+fn extract_records<R, P, D>(
+    archive: &mut Archive<R>,
+    filter_list: &[P],
+    destination: D,
+    verbose: bool,
+) -> Result<()>
 where
     R: Read + Seek,
-    I: IntoIterator<Item = Record>,
+    P: AsRef<Path>,
+    D: AsRef<Path>,
 {
-    for record in records {
-        match extract_file(reader, record, &args.chdir, args.verbose) {
-            // TODO: Error handling should be opimized
-            Err(e) => {
-                match e {
-                    BffError::BffReadError(ref read_error) => {
-                        match read_error {
-                            BffReadError::IoError(io_error) => {
-                                if io_error.kind() == io::ErrorKind::UnexpectedEof {
-                                    // Hopefully not unexpected EOF
-                                    return Ok(());
-                                } else {
-                                    return Err(e);
-                                }
-                            }
-                            BffReadError::EmptyFilename => eprintln!("{read_error}"),
-                            BffReadError::InvalidRecordMagic(_magic) => (),
-                            _ => return Err(e),
-                        }
-                    }
-                    BffError::BffExtractError(ref extract_error) => match extract_error {
-                        BffExtractError::IoError(_io_error) => return Err(e),
-                        BffExtractError::ModeError(_mode_error) => eprintln!("{e}"),
-                    },
-                    BffError::MissingParentDir(ref _path) => eprintln!("{e}"),
-                }
-            }
-            _ => (),
+    archive.extract_when(&destination, |inner_record| {
+        let take = filter_list.is_empty()
+            || filter_list
+                .iter()
+                .any(|inc_path| inner_record.filename().starts_with(inc_path));
+        if take && verbose {
+            println!("{}", inner_record.filename().display());
         }
-    }
-
-    Ok(())
+        take
+    })
 }
 
-fn main() -> Result<(), BffError> {
+fn main() -> Result<()> {
     let args = Args::parse();
 
-    let reader = File::open(&args.filename).map_err(|err| BffReadError::IoError(err))?;
+    let reader = File::open(&args.filename)?;
     if reader.metadata().unwrap().len() > 0xffffffff {
-        return Err(BffReadError::FileToBig.into());
+        return Err(Error::FileToBig);
     }
-    let mut reader = BufReader::new(reader);
-    read_file_header(&mut reader)?;
-
-    let records: Vec<_> = get_record_listing(&mut reader)
-        .filter(|record| {
-            args.file_list.is_empty()
-                || args
-                    .file_list
-                    .iter()
-                    .any(|inc_path| record.filename.starts_with(inc_path))
-        })
-        .collect();
-
-    if records.len() == 0 {
-        println!("No records found matching criterias.");
-        return Ok(());
-    }
-
+    let reader = BufReader::new(reader);
+    let mut archive = Archive::new(reader)?;
+    archive
+        .records()
+        .iter()
+        .for_each(|record| println!("{}", record.filename().display()));
     if args.list {
-        print_content(records, args.numeric);
+        print_content(&mut archive, &args.file_list, args.numeric);
     } else {
-        extract_records(&mut reader, records, args)?;
+        extract_records(&mut archive, &args.file_list, args.chdir, args.verbose)?;
     }
 
     Ok(())

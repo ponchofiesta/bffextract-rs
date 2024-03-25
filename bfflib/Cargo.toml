@@ -1,0 +1,17 @@
+[package]
+name = "bfflib"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+description = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+categories = ["compression"]
+
+[dependencies]
+chrono = { workspace = true }
+file-mode = { workspace = true }
+filetime = { workspace = true }
+normalize-path = { workspace = true }
