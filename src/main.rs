@@ -1,9 +1,9 @@
 //! bffextract CLI tool to extract or list content of BFF files (Backup File Format).
 
-pub mod bff;
-pub mod error;
-pub mod huffman;
-pub mod util;
+mod bff;
+mod error;
+mod huffman;
+mod util;
 
 use crate::bff::{extract_file, get_record_listing, read_file_header};
 use crate::error::{BffError, BffExtractError, BffReadError};
