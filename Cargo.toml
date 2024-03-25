@@ -1,6 +1,6 @@
 [package]
 name = "bffextract"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["Michael Richter <mr@osor.de>"]
 description = "Extract content of BFF file (AIX Backup file format)"
@@ -19,8 +19,8 @@ name = "bffextract"
 path = "src/lib.rs"
 
 [dependencies]
-chrono = "0.4.31"
-clap = { version = "4.4.12", features = ["derive"] }
+chrono = { version = "0.4.35", default-features = false, features = ["now"] }
+clap = { version = "4.5.3", features = ["derive"] }
 comfy-table = { version = "7.1.0", default-features = false }
 file-mode = "0.1.2"
 filetime = "0.2.23"

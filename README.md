@@ -23,13 +23,14 @@ https://github.com/ponchofiesta/bffextract-rs/releases
 ```
 Extract content of BFF file (AIX Backup file format)
 
-Usage: bffextract.exe [OPTIONS] <FILENAME>
+Usage: bffextract.exe [OPTIONS] <FILENAME> [FILE_LIST]...
 
 Arguments:
-  <FILENAME>  Extract to directory.
+  <FILENAME>      Path to BFF file.
+  [FILE_LIST]...  Extract specific source file(s) and folders recursively only.
 
 Options:
-  -C, --chdir <CHDIR>  Path to BFF file. [default: .]
+  -C, --chdir <CHDIR>  Extract to directory. [default: .]
   -t, --list           List content of BFF archive.
   -v, --verbose        Displays details while extracting.
   -n, --numeric        List numeric user and group IDs.

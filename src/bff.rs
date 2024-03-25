@@ -7,7 +7,7 @@ use filetime::{set_file_times, FileTime};
 use normalize_path::NormalizePath;
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// All BFF files should contain this magic number.
 pub const FILE_MAGIC: u32 = 0xea6b0009; //0x09006BEA;
@@ -134,7 +134,7 @@ pub fn extract_record<R: Read + Seek, P: AsRef<Path>>(
     record: &Record,
     target_path: P,
 ) -> Result<(), error::BffError> {
-    if record.filename.is_empty() {
+    if record.filename.as_os_str().is_empty() {
         return Err(error::BffReadError::EmptyFilename.into());
     }
 
@@ -157,7 +157,7 @@ pub fn extract_record<R: Read + Seek, P: AsRef<Path>>(
 #[derive(Debug)]
 pub struct Record {
     /// Filename
-    pub filename: String,
+    pub filename: PathBuf,
     /// Compressed file size
     pub compressed_size: u32,
     /// Decompressed file size.
@@ -186,9 +186,11 @@ impl From<RecordHeader> for Record {
             mode: Mode::from(value.mode),
             uid: value.uid,
             gid: value.gid,
-            mdate: NaiveDateTime::from_timestamp_opt(value.mtime as i64, 0)
+            mdate: DateTime::from_timestamp(value.mtime as i64, 0)
+                .map(|dt| dt.naive_local())
                 .unwrap_or_else(|| Utc::now().naive_local()),
-            adate: NaiveDateTime::from_timestamp_opt(value.atime as i64, 0)
+            adate: DateTime::from_timestamp(value.atime as i64, 0)
+                .map(|dt| dt.naive_local())
                 .unwrap_or_else(|| Utc::now().naive_local()),
             file_position: 0,
             magic: value.magic,
@@ -233,7 +235,8 @@ where
         ))?;
 
         let mut record: Record = record_header.into();
-        record.filename = filename;
+
+        record.filename = PathBuf::from(filename);
         record.file_position = position as u32;
         Ok(record)
     }
@@ -301,8 +304,8 @@ pub fn extract_file<R: Read + Seek, P: AsRef<Path>>(
 
     set_file_times(
         &target_path,
-        FileTime::from_unix_time(record.adate.timestamp(), 0),
-        FileTime::from_unix_time(record.mdate.timestamp(), 0),
+        FileTime::from_unix_time(record.adate.and_utc().timestamp(), 0),
+        FileTime::from_unix_time(record.mdate.and_utc().timestamp(), 0),
     )
     .map_err(|err| error::BffExtractError::IoError(err))?;
 
