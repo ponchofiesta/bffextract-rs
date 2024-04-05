@@ -1,3 +1,4 @@
+use crate::error::{BffError, BffReadError};
 use crate::{error, huffman, util};
 use chrono::prelude::*;
 #[cfg(unix)]
@@ -5,8 +6,9 @@ use file_mode::ModePath;
 use file_mode::{FileType, Mode};
 use filetime::{set_file_times, FileTime};
 use normalize_path::NormalizePath;
+use std::fmt::Display;
 use std::fs::File;
-use std::io::{BufWriter, Read, Seek, SeekFrom};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// All BFF files should contain this magic number.
@@ -127,34 +129,8 @@ pub fn read_aligned_string<R: Read>(reader: &mut R) -> Result<String, std::io::E
     }
 }
 
-/// Read data record from stream and write to file.
-/// Stream cursor must be at start position of a record.
-pub fn extract_record<R: Read + Seek, P: AsRef<Path>>(
-    reader: &mut R,
-    record: &Record,
-    target_path: P,
-) -> Result<(), error::BffError> {
-    if record.filename.as_os_str().is_empty() {
-        return Err(error::BffReadError::EmptyFilename.into());
-    }
-
-    let writer = File::create(&target_path).map_err(|err| error::BffExtractError::IoError(err))?;
-    let mut writer = BufWriter::new(writer);
-    reader
-        .seek(SeekFrom::Start(record.file_position as u64))
-        .unwrap();
-
-    if record.magic == HUFFMAN_MAGIC {
-        huffman::decompress_stream(reader, &mut writer, record.compressed_size as usize)?;
-    } else {
-        util::copy_stream(reader, &mut writer, record.compressed_size as usize)
-            .map_err(|err| error::BffExtractError::IoError(err))?;
-    }
-    Ok(())
-}
-
 /// Transformed representation of a single fileset record (file or directory entry).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Record {
     /// Filename
     pub filename: PathBuf,
@@ -195,6 +171,94 @@ impl From<RecordHeader> for Record {
             file_position: 0,
             magic: value.magic,
         }
+    }
+}
+
+impl Record {
+    /// Extract single file from stream to target directory.
+    pub fn extract_file<R: Read + Seek, P: AsRef<Path>>(
+        &self,
+        reader: &mut R,
+        out_dir: P,
+        verbose: bool,
+    ) -> Result<(), error::BffError> {
+        // A normalized target path for the current record file
+        let target_path = out_dir.as_ref().join(&self.filename).normalize();
+
+        // Ignore empty file names
+        if let Some(path) = target_path.to_str() {
+            if path == "" {
+                return Ok(());
+            }
+        }
+
+        if verbose {
+            println!("{}", target_path.display());
+        }
+
+        match self.mode.file_type() {
+            Some(FileType::Directory) => {
+                if !target_path.exists() {
+                    std::fs::create_dir_all(&target_path)
+                        .map_err(|err| error::BffExtractError::IoError(err))?;
+                }
+            }
+            _ => {
+                let target_dir = target_path
+                    .parent()
+                    .ok_or(error::BffError::MissingParentDir(
+                        target_path.display().to_string(),
+                    ))?;
+                if !target_dir.exists() {
+                    std::fs::create_dir_all(&target_dir)
+                        .map_err(|err| error::BffExtractError::IoError(err))?;
+                }
+
+                self.extract_record(reader, &target_path)?;
+            }
+        }
+
+        set_file_times(
+            &target_path,
+            FileTime::from_unix_time(self.adate.and_utc().timestamp(), 0),
+            FileTime::from_unix_time(self.mdate.and_utc().timestamp(), 0),
+        )
+        .map_err(|err| error::BffExtractError::IoError(err))?;
+
+        #[cfg(unix)]
+        target_path
+            .as_path()
+            .set_mode(record.mode.mode())
+            .map_err(|err| error::BffExtractError::ModeError(Box::new(err)))?;
+
+        Ok(())
+    }
+
+    /// Read data record from stream and write to file.
+    /// Stream cursor must be at start position of a record.
+    pub fn extract_record<R: Read + Seek, P: AsRef<Path>>(
+        &self,
+        reader: &mut R,
+        target_path: P,
+    ) -> Result<(), error::BffError> {
+        if self.filename.as_os_str().is_empty() {
+            return Err(error::BffReadError::EmptyFilename.into());
+        }
+
+        let writer =
+            File::create(&target_path).map_err(|err| error::BffExtractError::IoError(err))?;
+        let mut writer = BufWriter::new(writer);
+        reader
+            .seek(SeekFrom::Start(self.file_position as u64))
+            .unwrap();
+
+        if self.magic == HUFFMAN_MAGIC {
+            huffman::decompress_stream(reader, &mut writer, self.compressed_size as usize)?;
+        } else {
+            util::copy_stream(reader, &mut writer, self.compressed_size as usize)
+                .map_err(|err| error::BffExtractError::IoError(err))?;
+        }
+        Ok(())
     }
 }
 
@@ -253,67 +317,178 @@ where
     }
 }
 
+/// Describes the difference between two files
+/// Each value contains a tuple with the content of the left file and the right file
+pub enum RecordDiffField {
+    Exists(bool, bool),
+    Size(u32, u32),
+    Mode(Mode, Mode),
+    Uid(u32, u32),
+    Gid(u32, u32),
+    Mdate(NaiveDateTime, NaiveDateTime),
+    Magic(u16, u16),
+    /// The content of a file in a BFF file has differences.
+    Content(RecordDiffContent),
+}
+
+/// Differences of two files identified by its file name
+pub struct RecordDiff {
+    pub filename: PathBuf,
+    pub diffs: Vec<RecordDiffField>,
+}
+
+impl Display for RecordDiff {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use RecordDiffField::*;
+        let mut output = String::new();
+
+        // Check if file exists in one side only
+        let exists = self.diffs.iter().find(|item| matches!(item, Exists(_, _)));
+        let file_diff = match exists {
+            Some(Exists(left, _right)) => {
+                if *left {
+                    "< "
+                } else {
+                    "> "
+                }
+            }
+            _ => "- ",
+        };
+        output.push_str(file_diff);
+
+        // Current file name
+        output.push_str(&self.filename.display().to_string());
+        output.push_str("\n");
+
+        let date_format = "%Y-%m-%d %H:%M:%S";
+
+        // Add all differences
+        for diff in self.diffs.iter() {
+            let diff_str = match diff {
+                Size(left, right) => {
+                    format!("  Size:     <  {left}\n             > {right}\n")
+                }
+                Mode(left, right) => {
+                    format!("  Mode:     <  {left}\n             > {right}\n")
+                }
+                Uid(left, right) => {
+                    format!("  UID:      <  {left}\n             > {right}\n")
+                }
+                Gid(left, right) => {
+                    format!("  GID:      <  {left}\n             > {right}\n")
+                }
+                Mdate(left, right) => format!(
+                    "  Modified: <  {}\n             > {}\n",
+                    left.format(date_format),
+                    right.format(date_format)
+                ),
+                Magic(left, right) => {
+                    format!("  Magic:    <  {left:#01x}\n             > {right:#01x}\n")
+                }
+                Exists(_, _) => "".into(),
+                Content(_) => "".into(),
+            };
+            output.push_str(&diff_str);
+        }
+        write!(f, "{}", &output)
+    }
+}
+
+/// Difference in a file in the BFF file
+pub enum RecordDiffContent {
+    /// Both files are plaintext files. Provides a diff output.
+    Plaintext(String),
+    /// At least one file is a binary file. Provides the file position where the first difference occurs.
+    Binary(usize),
+}
+
+pub fn compare_records(left: &[Record], right: &[Record]) -> Vec<RecordDiff> {
+    use RecordDiffField::*;
+
+    let mut left_diffs: Vec<RecordDiff> = left
+        .into_iter()
+        .filter_map(|l| {
+            let r = right.into_iter().find(|r| l.filename == r.filename);
+            let mut diffs = vec![];
+            if let Some(r) = r {
+                // In both lists but has differences
+                if l.size != r.size {
+                    diffs.push(Size(l.size, r.size));
+                }
+                if l.mode != r.mode {
+                    diffs.push(Mode(l.mode.clone(), r.mode.clone()));
+                }
+                if l.uid != r.uid {
+                    diffs.push(Uid(l.uid, r.uid));
+                }
+                if l.gid != r.gid {
+                    diffs.push(Gid(l.gid, r.gid));
+                }
+                if l.mdate != r.mdate {
+                    diffs.push(Mdate(l.mdate, r.mdate));
+                }
+                if l.magic != r.magic {
+                    diffs.push(Magic(l.magic, r.magic));
+                }
+            } else {
+                // In left list only
+                diffs.push(Exists(true, false));
+            }
+            if diffs.len() > 0 {
+                return Some(RecordDiff {
+                    filename: l.filename.clone(),
+                    diffs,
+                });
+            }
+            None
+        })
+        .collect();
+
+    let right_diffs: Vec<RecordDiff> = right
+        .into_iter()
+        .filter_map(|r| {
+            let l = left.into_iter().find(|l| l.filename == r.filename);
+            let mut diffs = vec![];
+            if let None = l {
+                // In right list only
+                diffs.push(Exists(false, true));
+            }
+            if diffs.len() > 0 {
+                return Some(RecordDiff {
+                    filename: r.filename.clone(),
+                    diffs,
+                });
+            }
+            None
+        })
+        .collect();
+
+    left_diffs.extend(right_diffs);
+    left_diffs
+}
+
 /// Creates a Iterator to read all records.
 pub fn get_record_listing<R: Read + Seek>(reader: &mut R) -> impl Iterator<Item = Record> + '_ {
     let record_reader = RecordReader::new(reader);
     record_reader
 }
 
-/// Extract single file from stream to target directory.
-pub fn extract_file<R: Read + Seek, P: AsRef<Path>>(
-    reader: &mut R,
-    record: Record,
-    out_dir: P,
-    verbose: bool,
-) -> Result<(), error::BffError> {
-    // A normalized target path for the current record file
-    let target_path = out_dir.as_ref().join(&record.filename).normalize();
-
-    // Ignore empty file names
-    if let Some(path) = target_path.to_str() {
-        if path == "" {
-            return Ok(());
-        }
+pub(crate) fn open_bff_file<P: AsRef<Path>>(
+    filename: P,
+) -> Result<(impl Read + Seek, FileHeader), BffError> {
+    let reader = File::open(filename).map_err(|err| BffReadError::IoError(err))?;
+    if reader.metadata().unwrap().len() > 0xffffffff {
+        return Err(BffReadError::FileToBig.into());
     }
+    let mut reader = BufReader::new(reader);
+    let header = read_file_header(&mut reader)?;
+    Ok((reader, header))
+}
 
-    if verbose {
-        println!("{}", target_path.display());
+struct RecordContentReader {}
+
+impl Read for RecordContentReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        todo!()
     }
-
-    match record.mode.file_type() {
-        Some(FileType::Directory) => {
-            if !target_path.exists() {
-                std::fs::create_dir_all(&target_path)
-                    .map_err(|err| error::BffExtractError::IoError(err))?;
-            }
-        }
-        _ => {
-            let target_dir = target_path
-                .parent()
-                .ok_or(error::BffError::MissingParentDir(
-                    target_path.display().to_string(),
-                ))?;
-            if !target_dir.exists() {
-                std::fs::create_dir_all(&target_dir)
-                    .map_err(|err| error::BffExtractError::IoError(err))?;
-            }
-
-            extract_record(reader, &record, &target_path)?;
-        }
-    }
-
-    set_file_times(
-        &target_path,
-        FileTime::from_unix_time(record.adate.and_utc().timestamp(), 0),
-        FileTime::from_unix_time(record.mdate.and_utc().timestamp(), 0),
-    )
-    .map_err(|err| error::BffExtractError::IoError(err))?;
-
-    #[cfg(unix)]
-    target_path
-        .as_path()
-        .set_mode(record.mode.mode())
-        .map_err(|err| error::BffExtractError::ModeError(Box::new(err)))?;
-
-    Ok(())
 }
