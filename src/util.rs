@@ -1,9 +1,18 @@
+use std::io::{Seek, SeekFrom};
 use std::mem;
+use std::path::Path;
 use std::slice::from_raw_parts_mut;
+use std::str::from_utf8;
 use std::{
     cmp::min,
     io::{Read, Result, Write},
 };
+
+use crate::bff::{
+    compare_records, get_record_listing, open_bff_file, Record, RecordDiff, RecordDiffContent,
+    RecordDiffField,
+};
+use crate::error::BffError;
 
 /// Read defined `size` of `reader` stream and copy to `writer` stream.
 pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W, size: usize) -> Result<()> {
@@ -28,6 +37,59 @@ pub(crate) fn read_struct<R: Read, T: Sized>(reader: &mut R) -> Result<T> {
     let buffer_slice = unsafe { from_raw_parts_mut(&mut obj as *mut _ as *mut u8, size) };
     reader.read_exact(buffer_slice)?;
     Ok(obj)
+}
+
+pub enum ContentType {
+    Plaintext,
+    Binary,
+}
+
+/// Try to determine if the data is plaintext or binary
+pub fn get_content_type<R: Read + Seek>(
+    reader: &mut R,
+    position: u64,
+    size: usize,
+) -> Result<ContentType> {
+    let length = min(size, 2048);
+    let mut buffer = vec![0; length];
+    reader.seek(SeekFrom::Start(position))?;
+    reader.read_exact(&mut buffer)?;
+    Ok(match from_utf8(&buffer) {
+        Ok(_) => ContentType::Plaintext,
+        Err(_) => ContentType::Binary,
+    })
+}
+
+pub fn compare_files<R, R2>(
+    reader: &mut R,
+    records: &[Record],
+    reader_diff: &mut R2,
+    records_diff: &[Record],
+) -> std::result::Result<Vec<RecordDiff>, BffError>
+where
+    R: Read + Seek,
+    R2: Read + Seek,
+{
+    // Get metadata differences
+    let mut record_diffs = compare_records(records, &records_diff);
+
+    // Get content differences
+    record_diffs
+        .iter_mut()
+        .filter(|record_diff| {
+            // Get files that exist on both sides
+            !record_diff
+                .diffs
+                .iter()
+                .any(|field| matches!(field, RecordDiffField::Exists(_, _)))
+        })
+        .for_each(|record_diff| {
+            // record_diff
+            //     .diffs
+            //     .push(RecordDiffField::Content(RecordDiffContent::Binary(0)));
+        });
+
+    Ok(record_diffs)
 }
 
 #[cfg(test)]

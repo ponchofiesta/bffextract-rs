@@ -5,19 +5,17 @@ mod error;
 mod huffman;
 mod util;
 
-use crate::bff::{extract_file, get_record_listing, read_file_header};
+use crate::bff::get_record_listing;
 use crate::error::{BffError, BffExtractError, BffReadError};
-use bff::Record;
+use bff::{open_bff_file, Record, RecordDiff};
 use clap::Parser;
 use comfy_table::{presets, CellAlignment, Row, Table};
-use std::io::{self, BufReader};
+use std::io;
+use std::io::{Read, Seek};
 use std::path::PathBuf;
-use std::{
-    fs::File,
-    io::{Read, Seek},
-};
 #[cfg(not(windows))]
 use users::{Groups, Users, UsersCache};
+use util::compare_files;
 
 /// Definition of command line arguments
 #[derive(Parser, Debug)]
@@ -39,6 +37,9 @@ struct Args {
         help = "List content of BFF archive."
     )]
     list: bool,
+
+    #[arg(short = 'd', long, help = "Compare BFF file with another one.")]
+    diff: Option<PathBuf>,
 
     #[arg(
         short = 'v',
@@ -162,13 +163,13 @@ where
 }
 
 /// Extract all selected records
-fn extract_records<R, I>(reader: &mut R, records: I, args: Args) -> Result<(), BffError>
+fn extract_records<R, I>(reader: &mut R, records: I, args: &Args) -> Result<(), BffError>
 where
     R: Read + Seek,
     I: IntoIterator<Item = Record>,
 {
     for record in records {
-        match extract_file(reader, record, &args.chdir, args.verbose) {
+        match record.extract_file(reader, &args.chdir, args.verbose) {
             // TODO: Error handling should be opimized
             Err(e) => {
                 match e {
@@ -201,35 +202,49 @@ where
     Ok(())
 }
 
+/// Print the differences of two files
+fn print_diff(diffs: &[RecordDiff]) {
+    for diff in diffs {
+        print!("{}", diff);
+    }
+}
+
 fn main() -> Result<(), BffError> {
     let args = Args::parse();
 
-    let reader = File::open(&args.filename).map_err(|err| BffReadError::IoError(err))?;
-    if reader.metadata().unwrap().len() > 0xffffffff {
-        return Err(BffReadError::FileToBig.into());
-    }
-    let mut reader = BufReader::new(reader);
-    read_file_header(&mut reader)?;
+    let file_filter = |record: &Record| {
+        args.file_list.is_empty()
+            || args
+                .file_list
+                .iter()
+                .any(|inc_path| record.filename.starts_with(inc_path))
+    };
+
+    let (mut reader, _) = open_bff_file(&args.filename)?;
 
     let records: Vec<_> = get_record_listing(&mut reader)
-        .filter(|record| {
-            args.file_list.is_empty()
-                || args
-                    .file_list
-                    .iter()
-                    .any(|inc_path| record.filename.starts_with(inc_path))
-        })
+        .filter(&file_filter)
         .collect();
 
-    if records.len() == 0 {
+    if records.len() == 0 && args.diff.is_none() {
         println!("No records found matching criterias.");
         return Ok(());
     }
 
     if args.list {
+        // Print content of a file
         print_content(records, args.numeric);
+    } else if args.diff.is_some() {
+        // Print the differences of two files
+        let (mut reader_diff, _) = open_bff_file(args.diff.unwrap())?;
+        let records_diff: Vec<_> = get_record_listing(&mut reader_diff)
+            .filter(&file_filter)
+            .collect();
+        let diffs = compare_files(&mut reader, &records, &mut reader_diff, &records_diff)?;
+        print_diff(&diffs);
     } else {
-        extract_records(&mut reader, records, args)?;
+        // Extract a file
+        extract_records(&mut reader, records, &args)?;
     }
 
     Ok(())
