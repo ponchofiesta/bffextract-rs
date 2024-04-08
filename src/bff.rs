@@ -1,6 +1,5 @@
 use crate::error::{BffError, BffReadError};
 use crate::huffman::HuffmanReader;
-use crate::util::ReadSeek;
 use crate::{error, huffman, util};
 use chrono::prelude::*;
 #[cfg(unix)]
@@ -178,12 +177,16 @@ impl From<RecordHeader> for Record {
 
 impl Record {
     /// Extract single file from stream to target directory.
-    pub fn extract_file<R: Read + Seek, P: AsRef<Path>>(
+    pub fn extract_file<R, P>(
         &self,
         reader: &mut R,
         out_dir: P,
         verbose: bool,
-    ) -> Result<(), error::BffError> {
+    ) -> Result<(), error::BffError>
+    where
+        R: Read + Seek,
+        P: AsRef<Path>,
+    {
         // A normalized target path for the current record file
         let target_path = out_dir.as_ref().join(&self.filename).normalize();
 
@@ -238,11 +241,15 @@ impl Record {
 
     /// Read data record from stream and write to file.
     /// Stream cursor must be at start position of a record.
-    pub fn extract_record<R: Read + Seek, P: AsRef<Path>>(
+    pub fn extract_record<R, P>(
         &self,
         reader: &mut R,
         target_path: P,
-    ) -> Result<(), error::BffError> {
+    ) -> Result<(), error::BffError>
+    where
+        R: Read + Seek,
+        P: AsRef<Path>,
+    {
         if self.filename.as_os_str().is_empty() {
             return Err(error::BffReadError::EmptyFilename.into());
         }
@@ -251,22 +258,30 @@ impl Record {
             File::create(&target_path).map_err(|err| error::BffExtractError::IoError(err))?;
         let mut writer = BufWriter::new(writer);
 
-        let mut reader: Box<dyn ReadSeek> = Box::new(reader);
+        // let mut reader: Box<dyn Read + Seek> = Box::new(reader);
         if self.magic == HUFFMAN_MAGIC {
-            reader = Box::new(HuffmanReader::from(
-                &mut reader,
+            let mut reader = HuffmanReader::from(
+                reader,
                 SeekFrom::Start(self.file_position as u64),
                 self.compressed_size as usize,
-            )?);
+            )?;
             // huffman::decompress_stream(reader, &mut writer, self.compressed_size as usize)?;
+            util::copy_stream(
+                &mut reader,
+                &mut writer,
+                SeekFrom::Start(self.file_position as u64),
+                self.compressed_size as usize,
+            )
+            .map_err(|err| error::BffExtractError::IoError(err))?;
+        } else {
+            util::copy_stream(
+                reader,
+                &mut writer,
+                SeekFrom::Start(self.file_position as u64),
+                self.compressed_size as usize,
+            )
+            .map_err(|err| error::BffExtractError::IoError(err))?;
         }
-        util::copy_stream(
-            &mut reader,
-            &mut writer,
-            SeekFrom::Start(self.file_position as u64),
-            self.compressed_size as usize,
-        )
-        .map_err(|err| error::BffExtractError::IoError(err))?;
 
         Ok(())
     }

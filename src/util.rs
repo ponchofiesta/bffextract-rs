@@ -14,8 +14,6 @@ use crate::bff::{
 };
 use crate::error::BffError;
 
-pub(crate) trait ReadSeek: Read + Seek {}
-
 /// Read defined `size` of `reader` stream and copy to `writer` stream.
 pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W, position: SeekFrom, size: usize) -> Result<()> {
     const BUF_SIZE: usize = 1024;
