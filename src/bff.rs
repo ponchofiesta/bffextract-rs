@@ -1,6 +1,6 @@
 use crate::error::{BffError, BffReadError};
 use crate::huffman::HuffmanReader;
-use crate::{error, huffman, util};
+use crate::{error, util};
 use chrono::prelude::*;
 #[cfg(unix)]
 use file_mode::ModePath;
@@ -258,29 +258,17 @@ impl Record {
             File::create(&target_path).map_err(|err| error::BffExtractError::IoError(err))?;
         let mut writer = BufWriter::new(writer);
 
-        // let mut reader: Box<dyn Read + Seek> = Box::new(reader);
+        reader
+            .seek(SeekFrom::Start(self.file_position as u64))
+            .map_err(|e| BffReadError::IoError(e))?;
+
         if self.magic == HUFFMAN_MAGIC {
-            let mut reader = HuffmanReader::from(
-                reader,
-                SeekFrom::Start(self.file_position as u64),
-                self.compressed_size as usize,
-            )?;
-            // huffman::decompress_stream(reader, &mut writer, self.compressed_size as usize)?;
-            util::copy_stream(
-                &mut reader,
-                &mut writer,
-                SeekFrom::Start(self.file_position as u64),
-                self.compressed_size as usize,
-            )
-            .map_err(|err| error::BffExtractError::IoError(err))?;
+            let mut reader = HuffmanReader::from(reader, self.compressed_size as usize)?;
+            util::copy_stream(&mut reader, &mut writer, self.compressed_size as usize)
+                .map_err(|err| error::BffExtractError::IoError(err))?;
         } else {
-            util::copy_stream(
-                reader,
-                &mut writer,
-                SeekFrom::Start(self.file_position as u64),
-                self.compressed_size as usize,
-            )
-            .map_err(|err| error::BffExtractError::IoError(err))?;
+            util::copy_stream(reader, &mut writer, self.compressed_size as usize)
+                .map_err(|err| error::BffExtractError::IoError(err))?;
         }
 
         Ok(())

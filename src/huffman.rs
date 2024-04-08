@@ -1,10 +1,10 @@
 //! Decoding of compressed BFF record data
 
 use crate::error;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 
 /// Huffman decompression of a single record data
-pub struct HuffmanReader<'a, R: Read + Seek> {
+pub struct HuffmanReader<'a, R: Read> {
     /// Source reader containing compressed data
     reader: &'a mut R,
     /// Amount of bytes read while decompressing
@@ -23,10 +23,9 @@ pub struct HuffmanReader<'a, R: Read + Seek> {
 
 impl<'a, R> HuffmanReader<'a, R>
 where
-    R: Read + Seek,
+    R: Read,
 {
-    pub fn from(reader: &'a mut R, position: SeekFrom, size: usize) -> Result<Self, error::BffReadError> {
-        reader.seek(position)?;
+    pub fn from(reader: &'a mut R, size: usize) -> Result<Self, error::BffReadError> {
         let mut r = HuffmanReader {
             reader,
             total_read: 0,
@@ -102,7 +101,7 @@ where
 
 impl<'a, R> Read for HuffmanReader<'a, R>
 where
-    R: Read + Seek,
+    R: Read,
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let buf_size = buf.len();
