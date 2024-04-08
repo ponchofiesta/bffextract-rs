@@ -6,7 +6,7 @@ authors = ["Michael Richter <mr@osor.de>"]
 description = "Extract content of BFF file (AIX Backup file format)"
 readme = "README.md"
 repository = "https://github.com/ponchofiesta/bffextract-rs"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 keywords = ["bff", "aix", "extract", "unpack", "decompress"]
 categories = ["command-line-utilities", "compression"]
 
