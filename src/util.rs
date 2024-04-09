@@ -9,12 +9,12 @@ use std::{
 };
 
 use crate::bff::{
-    compare_records, get_record_listing, open_bff_file, Record, RecordDiff, RecordDiffContent,
-    RecordDiffField,
+    compare_records, Record, RecordDiff, RecordDiffField,
 };
 use crate::error::BffError;
 
 pub(crate) trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
 
 /// Read defined `size` of `reader` stream and copy to `writer` stream.
 pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W, position: SeekFrom, size: usize) -> Result<()> {
