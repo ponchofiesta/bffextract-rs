@@ -17,7 +17,7 @@ pub(crate) trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
 /// Read defined `size` of `reader` stream and copy to `writer` stream.
-pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W, position: SeekFrom, size: usize) -> Result<()> {
+pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W, size: usize) -> Result<()> {
     const BUF_SIZE: usize = 1024;
     let mut total = 0;
     let mut to_read = min(BUF_SIZE, size);
@@ -113,7 +113,7 @@ mod tests {
         let mut stream = Cursor::new(b"abcdefghijklmnopqrstuvwxyz");
         let mut result: Vec<u8> = vec![];
 
-        copy_stream(&mut stream, &mut result, SeekFrom::Current(0), 5)?;
+        copy_stream(&mut stream, &mut result, 5)?;
 
         assert_eq!(result, b"abcde");
         Ok(())
