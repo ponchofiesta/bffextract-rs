@@ -9,6 +9,9 @@ pub struct HuffmanReader<'a, R: Read> {
     reader: &'a mut R,
     /// Amount of bytes read while decompressing
     total_read: usize,
+    code: u8,
+    level: usize,
+    bits_start: i32,
     /// Amount of Huffman tree levels
     treelevels: usize,
     inodesin: Vec<u8>,
@@ -29,6 +32,9 @@ where
         let mut r = HuffmanReader {
             reader,
             total_read: 0,
+            code: 0,
+            level: 0,
+            bits_start: 0,
             treelevels: 0,
             inodesin: vec![],
             symbolsin: vec![],
@@ -105,42 +111,45 @@ where
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let buf_size = buf.len();
-        let mut current_read = 0;
-        let mut level = 0;
-        let mut code = 0;
+        let mut current_out = 0;
         let mut buffer = [0; 1];
         let mut symbol;
         let mut inlevelindex;
         let treelens: Vec<usize> = self.tree.iter().map(|l| l.len()).collect();
 
-        while self.total_read < self.size && current_read < buf_size {
+        while self.total_read < self.size && current_out < buf_size {
             self.reader
                 .read_exact(&mut buffer)?;
             self.total_read += 1;
-            current_read += 1;
-            for i in (0..=7).rev() {
-                code = (code << 1) | ((buffer[0] >> i) & 1);
-                if code >= self.inodesin[level] {
-                    inlevelindex = (code - self.inodesin[level]) as usize;
-                    if inlevelindex > self.symbolsin[level] as usize {
+            for i in (self.bits_start..=7).rev() {
+                self.bits_start = i;
+                self.code = (self.code << 1) | ((buffer[0] >> i) & 1);
+                if self.code >= self.inodesin[self.level] {
+                    inlevelindex = (self.code - self.inodesin[self.level]) as usize;
+                    if inlevelindex > self.symbolsin[self.level] as usize {
                         return Err(std::io::Error::other(error::BffReadError::InvalidLevelIndex));
                     }
-                    if treelens[level] <= inlevelindex {
+                    if treelens[self.level] <= inlevelindex {
                         // Hopefully the end of the file
-                        return Ok(current_read);
+                        return Ok(current_out);
                     }
-                    symbol = self.tree[level][inlevelindex];
-                    buf[current_read] = symbol;
-                    code = 0;
-                    level = 0;
+                    symbol = self.tree[self.level][inlevelindex];
+                    buf[current_out] = symbol;
+                    current_out += 1;
+                    self.code = 0;
+                    self.level = 0;
+                    if current_out == buf_size {
+                        return Ok(current_out);
+                    }
                 } else {
-                    level += 1;
-                    if level > self.treelevels {
+                    self.level += 1;
+                    if self.level > self.treelevels {
                         return Err(std::io::Error::other(error::BffReadError::InvalidTreelevel));
                     }
                 }
             }
+            self.bits_start = 0;
         }
-        Ok(current_read)
+        Ok(current_out)
     }
 }
