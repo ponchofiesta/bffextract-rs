@@ -11,7 +11,6 @@ pub struct HuffmanReader<'a, R: Read> {
     total_read: usize,
     code: u8,
     level: usize,
-    bits_start: i32,
     /// Amount of Huffman tree levels
     treelevels: usize,
     inodesin: Vec<u8>,
@@ -19,9 +18,11 @@ pub struct HuffmanReader<'a, R: Read> {
     symbolsin: Vec<u8>,
     /// Huffman tree
     tree: Vec<Vec<u8>>,
+    treelens: Vec<usize>,
     symbol_size: usize,
     /// Maximum amount of bytes in input stream
     size: usize,
+    offset_buf: Vec<u8>,
 }
 
 impl<'a, R> HuffmanReader<'a, R>
@@ -34,13 +35,14 @@ where
             total_read: 0,
             code: 0,
             level: 0,
-            bits_start: 0,
             treelevels: 0,
             inodesin: vec![],
             symbolsin: vec![],
             tree: vec![],
+            treelens: vec![],
             symbol_size: 0,
             size,
+            offset_buf: Vec::with_capacity(8),
         };
         r.parse_header()?;
         Ok(r)
@@ -92,6 +94,7 @@ where
         self.symbolsin[self.treelevels] += 1;
 
         self.fill_inodesin(0);
+        self.treelens = self.tree.iter().map(|l| l.len()).collect();
         Ok(())
     }
 
@@ -111,36 +114,44 @@ where
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let buf_size = buf.len();
-        let mut current_out = 0;
+        let mut current_out = self.offset_buf.len();
         let mut buffer = [0; 1];
         let mut symbol;
         let mut inlevelindex;
-        let treelens: Vec<usize> = self.tree.iter().map(|l| l.len()).collect();
+        
+        // Read in extracted bytes from previous call
+        for i in 0..self.offset_buf.len() {
+            buf[i] = self.offset_buf[i];
+        }
+        self.offset_buf = vec![];
 
+        // Read new bytes from input
         while self.total_read < self.size && current_out < buf_size {
+            
             self.reader
                 .read_exact(&mut buffer)?;
             self.total_read += 1;
-            for i in (self.bits_start..=7).rev() {
-                self.bits_start = i;
+            
+            for i in (0..=7).rev() {
                 self.code = (self.code << 1) | ((buffer[0] >> i) & 1);
                 if self.code >= self.inodesin[self.level] {
                     inlevelindex = (self.code - self.inodesin[self.level]) as usize;
                     if inlevelindex > self.symbolsin[self.level] as usize {
                         return Err(std::io::Error::other(error::BffReadError::InvalidLevelIndex));
                     }
-                    if treelens[self.level] <= inlevelindex {
+                    if self.treelens[self.level] <= inlevelindex {
                         // Hopefully the end of the file
                         return Ok(current_out);
                     }
                     symbol = self.tree[self.level][inlevelindex];
-                    buf[current_out] = symbol;
+                    if current_out >= buf_size {
+                        self.offset_buf.push(symbol);
+                    } else {
+                        buf[current_out] = symbol;
+                    }
                     current_out += 1;
                     self.code = 0;
                     self.level = 0;
-                    if current_out == buf_size {
-                        return Ok(current_out);
-                    }
                 } else {
                     self.level += 1;
                     if self.level > self.treelevels {
@@ -148,7 +159,6 @@ where
                     }
                 }
             }
-            self.bits_start = 0;
         }
         Ok(current_out)
     }

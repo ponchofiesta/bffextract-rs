@@ -7,6 +7,7 @@ use file_mode::ModePath;
 use file_mode::{FileType, Mode};
 use filetime::{set_file_times, FileTime};
 use normalize_path::NormalizePath;
+use similar::TextDiff;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom};
@@ -341,7 +342,7 @@ pub enum RecordDiffField {
     Mdate(NaiveDateTime, NaiveDateTime),
     Magic(u16, u16),
     /// The content of a file in a BFF file has differences.
-    Content(RecordDiffContent),
+    Content(RecordDiffContent, RecordDiffContent),
 }
 
 /// Differences of two files identified by its file name
@@ -399,7 +400,7 @@ impl Display for RecordDiff {
                     format!("  Magic:    <  {left:#01x}\n             > {right:#01x}\n")
                 }
                 Exists(_, _) => "".into(),
-                Content(_) => "".into(),
+                Content(_, _) => "".into(),
             };
             output.push_str(&diff_str);
         }
@@ -412,73 +413,10 @@ pub enum RecordDiffContent {
     /// Both files are plaintext files. Provides a diff output.
     Plaintext(String),
     /// At least one file is a binary file. Provides the file position where the first difference occurs.
-    Binary(usize),
+    Binary,
 }
 
-pub fn compare_records(left: &[Record], right: &[Record]) -> Vec<RecordDiff> {
-    use RecordDiffField::*;
 
-    let mut left_diffs: Vec<RecordDiff> = left
-        .into_iter()
-        .filter_map(|l| {
-            let r = right.into_iter().find(|r| l.filename == r.filename);
-            let mut diffs = vec![];
-            if let Some(r) = r {
-                // In both lists but has differences
-                if l.size != r.size {
-                    diffs.push(Size(l.size, r.size));
-                }
-                if l.mode != r.mode {
-                    diffs.push(Mode(l.mode.clone(), r.mode.clone()));
-                }
-                if l.uid != r.uid {
-                    diffs.push(Uid(l.uid, r.uid));
-                }
-                if l.gid != r.gid {
-                    diffs.push(Gid(l.gid, r.gid));
-                }
-                if l.mdate != r.mdate {
-                    diffs.push(Mdate(l.mdate, r.mdate));
-                }
-                if l.magic != r.magic {
-                    diffs.push(Magic(l.magic, r.magic));
-                }
-            } else {
-                // In left list only
-                diffs.push(Exists(true, false));
-            }
-            if diffs.len() > 0 {
-                return Some(RecordDiff {
-                    filename: l.filename.clone(),
-                    diffs,
-                });
-            }
-            None
-        })
-        .collect();
-
-    let right_diffs: Vec<RecordDiff> = right
-        .into_iter()
-        .filter_map(|r| {
-            let l = left.into_iter().find(|l| l.filename == r.filename);
-            let mut diffs = vec![];
-            if let None = l {
-                // In right list only
-                diffs.push(Exists(false, true));
-            }
-            if diffs.len() > 0 {
-                return Some(RecordDiff {
-                    filename: r.filename.clone(),
-                    diffs,
-                });
-            }
-            None
-        })
-        .collect();
-
-    left_diffs.extend(right_diffs);
-    left_diffs
-}
 
 /// Creates a Iterator to read all records.
 pub fn get_record_listing<R: Read + Seek>(reader: &mut R) -> impl Iterator<Item = Record> + '_ {

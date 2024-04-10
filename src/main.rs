@@ -10,12 +10,12 @@ use crate::error::{BffError, BffExtractError, BffReadError};
 use bff::{open_bff_file, Record, RecordDiff};
 use clap::Parser;
 use comfy_table::{presets, CellAlignment, Row, Table};
+use util::compare_records;
 use std::io;
 use std::io::{Read, Seek};
 use std::path::PathBuf;
 #[cfg(not(windows))]
 use users::{Groups, Users, UsersCache};
-use util::compare_files;
 
 /// Definition of command line arguments
 #[derive(Parser, Debug)]
@@ -240,7 +240,7 @@ fn main() -> Result<(), BffError> {
         let records_diff: Vec<_> = get_record_listing(&mut reader_diff)
             .filter(&file_filter)
             .collect();
-        let diffs = compare_files(&mut reader, &records, &mut reader_diff, &records_diff)?;
+        let diffs = compare_records(&mut reader, &records, &mut reader_diff, &records_diff)?;
         print_diff(&diffs);
     } else {
         // Extract a file
