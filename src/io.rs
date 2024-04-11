@@ -1,4 +1,4 @@
-use std::{cmp::min, io::{Error, Read, Result as IoResult, Seek, SeekFrom}};
+use std::io::{Error, Read, Result as IoResult, Seek, SeekFrom};
 
 pub(crate) struct SelectiveReader<'a, R>
 where
@@ -20,13 +20,17 @@ impl<'a, R> Read for SelectiveReader<'a, R> where R: Read + Seek {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let pos = self.reader.seek(SeekFrom::Current(0))?;
         let max_buf_len = self.start as usize + self.size as usize - pos as usize;
-        let buf_len = min(max_buf_len, buf.len());
-        let mut buffer = vec![0u8; buf_len];
-        self.reader.read(&mut buffer)?;
-        for i in 0..buf_len {
-            buf[i] = buffer[i];
+        if max_buf_len < buf.len() {
+            let mut buffer = vec![0u8; max_buf_len];
+            self.reader.read(&mut buffer)?;
+            for i in 0..max_buf_len {
+                buf[i] = buffer[i];
+            }
+            return Ok(max_buf_len);
+        } else {
+            self.reader.read(buf)?;
+            return Ok(buf.len());
         }
-        Ok(buf_len)
     }
 }
 
@@ -44,6 +48,9 @@ impl<'a, R> Seek for SelectiveReader<'a, R> where R: Read + Seek {
             SeekFrom::End(pos) => SeekFrom::End(get_pos(pos)?),
             SeekFrom::Current(pos) => SeekFrom::Current(get_pos(pos)?),
         };
-        self.reader.seek(pos)
+        match self.reader.seek(pos) {
+            Ok(pos) => Ok(pos - self.start),
+            Err(e) => Err(e),
+        }
     }
 }
