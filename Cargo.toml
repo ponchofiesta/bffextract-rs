@@ -33,3 +33,6 @@ users = { version = "0.11.0", default-features = false, features = ["cache"] }
 
 [dev-dependencies]
 mockall = "0.12.1"
+
+[profile.release]
+debug = true
