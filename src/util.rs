@@ -16,16 +16,13 @@ pub(crate) trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
 /// Read defined `size` of `reader` stream and copy to `writer` stream.
-pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W, size: usize) -> Result<()> {
-    const BUF_SIZE: usize = 1024;
-    let mut total = 0;
-    let mut to_read = min(BUF_SIZE, size);
-    while total < size {
-        let mut data = vec![0; to_read];
-        reader.read(&mut data)?;
-        writer.write_all(&data)?;
-        total += to_read;
-        to_read = min(BUF_SIZE, size - total);
+pub fn copy_stream<R: Read, W: Write>(reader: &mut R, writer: &mut W) -> Result<()> {
+    let mut buf = [0u8; 8192];
+    while let Ok(size) = reader.read(&mut buf) {
+        if size == 0 {
+            return Ok(());
+        }
+        writer.write_all(&buf[..size])?;
     }
     Ok(())
 }
@@ -179,11 +176,10 @@ where
     R1: Read + Seek,
     R2: Read + Seek,
 {
-    let mut hasher = Sha256::new();
-    let result = hasher.finalize();
+    todo!()
 }
 
-fn get_checksum<R>(reader: &mut R, record: &Record) -> 
+
 
 fn get_diff_content<R>(reader: &mut R, record: &Record) -> RecordDiffContent
 where
@@ -194,7 +190,7 @@ where
         .seek(SeekFrom::Start(record.file_position as u64))
         .unwrap();
     if record.magic == HUFFMAN_MAGIC {
-        let mut left_reader = HuffmanReader::from(reader, record.compressed_size as usize).unwrap();
+        let mut left_reader = HuffmanReader::from(reader).unwrap();
         content_type = get_content_type(&mut left_reader, record.size as usize).unwrap();
     } else {
         content_type = get_content_type(reader, record.size as usize).unwrap();
@@ -205,7 +201,7 @@ where
     let diff_content = match content_type {
         ContentType::Plaintext => {
             let mut buf = BufWriter::new(Vec::new());
-            copy_stream(reader, &mut buf, record.size as usize).unwrap();
+            copy_stream(reader, &mut buf).unwrap();
             let bytes = buf.into_inner().unwrap();
             let content = String::from_utf8(bytes).unwrap();
             RecordDiffContent::Plaintext(content)
@@ -234,9 +230,9 @@ mod tests {
         let mut stream = Cursor::new(b"abcdefghijklmnopqrstuvwxyz");
         let mut result: Vec<u8> = vec![];
 
-        copy_stream(&mut stream, &mut result, 5)?;
+        copy_stream(&mut stream, &mut result)?;
 
-        assert_eq!(result, b"abcde");
+        assert_eq!(result, b"abcdefghijklmnopqrstuvwxyz");
         Ok(())
     }
 

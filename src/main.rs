@@ -4,6 +4,7 @@ mod bff;
 mod error;
 mod huffman;
 mod util;
+pub mod io;
 
 use crate::bff::get_record_listing;
 use crate::error::{BffError, BffExtractError, BffReadError};
@@ -11,8 +12,7 @@ use bff::{open_bff_file, Record, RecordDiff};
 use clap::Parser;
 use comfy_table::{presets, CellAlignment, Row, Table};
 use util::compare_records;
-use std::io;
-use std::io::{Read, Seek};
+use std::io::{ErrorKind, Read, Seek};
 use std::path::PathBuf;
 #[cfg(not(windows))]
 use users::{Groups, Users, UsersCache};
@@ -176,7 +176,7 @@ where
                     BffError::BffReadError(ref read_error) => {
                         match read_error {
                             BffReadError::IoError(io_error) => {
-                                if io_error.kind() == io::ErrorKind::UnexpectedEof {
+                                if io_error.kind() == ErrorKind::UnexpectedEof {
                                     // Hopefully not unexpected EOF
                                     return Ok(());
                                 } else {

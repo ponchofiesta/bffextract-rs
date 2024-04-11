@@ -13,3 +13,4 @@ pub mod bff;
 pub mod error;
 pub mod huffman;
 pub mod util;
+pub mod io;

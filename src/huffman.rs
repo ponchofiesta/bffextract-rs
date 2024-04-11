@@ -1,7 +1,7 @@
 //! Decoding of compressed BFF record data
 
 use crate::error;
-use std::io::Read;
+use std::{cmp::min, io::Read};
 
 /// Huffman decompression of a single record data
 pub struct HuffmanReader<'a, R: Read> {
@@ -20,8 +20,6 @@ pub struct HuffmanReader<'a, R: Read> {
     tree: Vec<Vec<u8>>,
     treelens: Vec<usize>,
     symbol_size: usize,
-    /// Maximum amount of bytes in input stream
-    size: usize,
     offset_buf: Vec<u8>,
 }
 
@@ -29,7 +27,7 @@ impl<'a, R> HuffmanReader<'a, R>
 where
     R: Read,
 {
-    pub fn from(reader: &'a mut R, size: usize) -> Result<Self, error::BffReadError> {
+    pub fn from(reader: &'a mut R) -> Result<Self, error::BffReadError> {
         let mut r = HuffmanReader {
             reader,
             total_read: 0,
@@ -41,7 +39,6 @@ where
             tree: vec![],
             treelens: vec![],
             symbol_size: 0,
-            size,
             offset_buf: Vec::with_capacity(8),
         };
         r.parse_header()?;
@@ -126,7 +123,7 @@ where
         self.offset_buf = vec![];
 
         // Read new bytes from input
-        while self.total_read < self.size && current_out < buf_size {
+        while current_out < buf_size {
             
             self.reader
                 .read_exact(&mut buffer)?;
@@ -160,6 +157,6 @@ where
                 }
             }
         }
-        Ok(current_out)
+        Ok(min(current_out, buf_size))
     }
 }

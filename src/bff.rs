@@ -1,5 +1,6 @@
 use crate::error::{BffError, BffReadError};
 use crate::huffman::HuffmanReader;
+use crate::io::SelectiveReader;
 use crate::{error, util};
 use chrono::prelude::*;
 #[cfg(unix)]
@@ -259,16 +260,19 @@ impl Record {
             File::create(&target_path).map_err(|err| error::BffExtractError::IoError(err))?;
         let mut writer = BufWriter::new(writer);
 
-        reader
-            .seek(SeekFrom::Start(self.file_position as u64))
-            .map_err(|e| BffReadError::IoError(e))?;
+        let mut reader = SelectiveReader::new(
+            reader,
+            self.file_position as u64,
+            self.compressed_size as u64,
+        )
+        .map_err(|err| error::BffReadError::IoError(err))?;
 
         if self.magic == HUFFMAN_MAGIC {
-            let mut reader = HuffmanReader::from(reader, self.compressed_size as usize)?;
-            util::copy_stream(&mut reader, &mut writer, self.compressed_size as usize)
+            let mut reader = HuffmanReader::from(&mut reader)?;
+            util::copy_stream(&mut reader, &mut writer)
                 .map_err(|err| error::BffExtractError::IoError(err))?;
         } else {
-            util::copy_stream(reader, &mut writer, self.compressed_size as usize)
+            util::copy_stream(&mut reader, &mut writer)
                 .map_err(|err| error::BffExtractError::IoError(err))?;
         }
 
@@ -415,8 +419,6 @@ pub enum RecordDiffContent {
     /// At least one file is a binary file. Provides the file position where the first difference occurs.
     Binary,
 }
-
-
 
 /// Creates a Iterator to read all records.
 pub fn get_record_listing<R: Read + Seek>(reader: &mut R) -> impl Iterator<Item = Record> + '_ {
