@@ -15,7 +15,7 @@ name = "bffextract"
 path = "src/main.rs"
 
 [dependencies]
-bfflib = { path = "../bfflib" }
+bfflib = { path = "../bfflib", version = "0.6.0" }
 chrono = { workspace = true }
 clap = { workspace = true }
 comfy-table = { workspace = true }
