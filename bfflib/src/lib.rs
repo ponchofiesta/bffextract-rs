@@ -10,31 +10,30 @@
 //! 
 //! Open an archive file:
 //! 
-//! ```rust,no_compile
-//! let file = File::open("file.bff")?;
-//! let reader = BufReader::new(file);
-//! let mut archive = Archive::new(file)?;
+//! ```rust
+//! use std::{fs::File, io::BufReader};
+//! use bfflib::{archive::Archive, Result};
+//! 
+//! fn example() -> Result<()> {
+//!     // Open BFF file
+//!     let file = File::open("file.bff")?;
+//!     // Use BufReader for better performance
+//!     let reader = BufReader::new(file);
+//!     let mut archive = Archive::new(reader)?;
+//! 
+//!     // Print filenames of all records in the archive
+//!     archive.records().iter()
+//!         .for_each(|record| println!("{}", record.filename().display()));
+//! 
+//!     // Extract the whole archive
+//!     archive.extract("output_dir")?;
+//! 
+//!     // Extract single file
+//!     archive.extract_file_by_name("./path/file", "output_dir")?;
+//! 
+//!     Ok(())
+//! }
 //! ```
-//! 
-//! Extract the whole archive:
-//! 
-//! ```rust,no_compile
-//! archive.extract("output_dir")?;
-//! ```
-//! 
-//! Print filenames of all records in the archive:
-//! 
-//! ```rust,no_compile
-//! archive.records().iter()
-//!     .for_each(|record| println!("{}", record.filename().display()));
-//! ```
-//! 
-//! Extract single file:
-//! 
-//! ```rust,no_compile
-//! archive.extract_file_by_name("./path/file", "output_dir")?;
-//! ```
-//! 
 
 pub mod archive;
 pub mod bff;
