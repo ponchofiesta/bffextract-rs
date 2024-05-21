@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - id: get_variables
         run: |
-          artifact_name=$(yq .package.name Cargo.toml)
+          artifact_name=$(yq .package.name bffextract/Cargo.toml)
           echo "artifact_name=$artifact_name" >> $GITHUB_OUTPUT
           echo "version=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
  
@@ -31,15 +31,15 @@ jobs:
       matrix:
         include:
           - os: ubuntu-20.04
-            pack: tar czf ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-linux.tar.gz target/x86_64-unknown-linux-musl/release/${{ needs.pre.outputs.artifact_name }} README.md LICENSE-MIT
+            pack: tar czf ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-linux.tar.gz target/x86_64-unknown-linux-musl/release/${{ needs.pre.outputs.artifact_name }} README.md LICENSE-MIT LICENSE-APACHE
             asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-linux.tar.gz
             build: cargo build --release --locked --target x86_64-unknown-linux-musl
           - os: windows-2019
-            pack: Compress-Archive -DestinationPath ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip -Path target\release\${{ needs.pre.outputs.artifact_name }}.exe, README.md, LICENSE-MIT
+            pack: Compress-Archive -DestinationPath ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip -Path target\release\${{ needs.pre.outputs.artifact_name }}.exe, README.md, LICENSE-MIT LICENSE-APACHE
             asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip
             build: cargo build --release --locked
-          - os: macos-11
-            pack: tar czf ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-macos.tar.gz target/release/${{ needs.pre.outputs.artifact_name }} README.md LICENSE-MIT
+          - os: macos-12
+            pack: tar czf ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-macos.tar.gz target/release/${{ needs.pre.outputs.artifact_name }} README.md LICENSE-MIT LICENSE-APACHE
             asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-macos.tar.gz
             build: cargo build --release --locked
     steps:
