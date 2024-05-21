@@ -62,7 +62,7 @@ impl<R: Read> HuffmanDecoder<R> {
         }
 
         if self.symbol_size > 256 {
-            return Err(Error::BadSymbolTable.into());
+            return Err(Error::BadSymbolTable);
         }
 
         self.symbolsin[self.treelevels as usize] += 1;
@@ -151,3 +151,21 @@ impl<R: Read> Read for HuffmanDecoder<R> {
         Ok(min(current_out, buf_size))
     }
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use std::{fs::File, io::Read, path::PathBuf};
+
+//     use super::HuffmanDecoder;
+
+//     #[test]
+//     fn decode() -> std::io::Result<()> {
+//         let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+//         dir.push("../resources/test");
+//         let file = File::open(dir.join("test.txt.z"))?;
+//         let mut decoder = HuffmanDecoder::new(file).map_err(|e| std::io::Error::other(e))?;
+//         let mut result = String::new();
+//         decoder.read_to_string(&mut result)?;
+//         Ok(())
+//     }
+// }
