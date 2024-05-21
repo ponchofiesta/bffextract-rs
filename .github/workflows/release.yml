@@ -35,7 +35,7 @@ jobs:
             asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-linux.tar.gz
             build: cargo build --release --locked --target x86_64-unknown-linux-musl
           - os: windows-2019
-            pack: Compress-Archive -DestinationPath ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip -Path target\release\${{ needs.pre.outputs.artifact_name }}.exe, README.md, LICENSE-MIT LICENSE-APACHE
+            pack: Compress-Archive -DestinationPath ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip -Path target\release\${{ needs.pre.outputs.artifact_name }}.exe, README.md, LICENSE-MIT, LICENSE-APACHE
             asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip
             build: cargo build --release --locked
           - os: macos-12
