@@ -30,7 +30,7 @@ pub enum Error {
     // Extraction errors
     /// File system entry mode could not be set. Typically should contain a `std::io::error`.
     #[allow(dead_code)]
-    ModeError(Box<dyn std::error::Error>),
+    ModeError(Box<dyn std::error::Error + Send + Sync>),
     /// The record has no parent directory. This should never occur.
     MissingParentDir(String),
 

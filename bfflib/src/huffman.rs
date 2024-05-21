@@ -121,8 +121,7 @@ impl<R: Read> Read for HuffmanDecoder<R> {
                 if self.code >= self.inodesin[self.level] {
                     inlevelindex = (self.code - self.inodesin[self.level]) as usize;
                     if inlevelindex > self.symbolsin[self.level] as usize {
-                        // TODO: Use correct error type
-                        return Err(std::io::Error::other("Error::InvalidLevelIndex"));
+                        return Err(std::io::Error::other(Error::InvalidLevelIndex));
                     }
                     if self.treelens[self.level] <= inlevelindex {
                         // Hopefully the end of the file
@@ -140,8 +139,7 @@ impl<R: Read> Read for HuffmanDecoder<R> {
                 } else {
                     self.level += 1;
                     if self.level > self.treelevels {
-                        // TODO: Use correct error type
-                        return Err(std::io::Error::other("Error::InvalidTreelevel"));
+                        return Err(std::io::Error::other(Error::InvalidTreelevel));
                     }
                 }
             }
