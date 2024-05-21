@@ -108,3 +108,45 @@ pub(crate) fn read_aligned_string<R: ?Sized + Read>(reader: &mut R) -> Result<St
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::*;
+
+    #[test]
+    fn read_aligned_string_default() {
+        let mut reader = Cursor::new([97, 98, 99, 0, 1, 2, 3, 4]);
+        let result = read_aligned_string(&mut reader).expect("Could not read aligned string.");
+        assert_eq!(result, "abc");
+    }
+
+    #[test]
+    fn read_aligned_string_double() {
+        let mut reader = Cursor::new([97, 98, 99, 0, 1, 2, 3, 4, 97, 98, 99, 0, 1, 2, 3, 4]);
+        let result = read_aligned_string(&mut reader).expect("Could not read aligned string.");
+        assert_eq!(result, "abc");
+    }
+
+    #[test]
+    fn read_aligned_string_long() {
+        let mut reader = Cursor::new([97, 98, 99, 100, 101, 102, 103, 104, 97, 98, 99, 0, 1, 2, 3, 4]);
+        let result = read_aligned_string(&mut reader).expect("Could not read aligned string.");
+        assert_eq!(result, "abcdefghabc");
+    }
+
+    #[test]
+    fn read_aligned_string_no_null() {
+        let mut reader = Cursor::new([97, 98, 99, 1, 1, 2, 3, 4]);
+        let result = read_aligned_string(&mut reader).expect("Could not read aligned string.");
+        assert_eq!(result, "abc\u{1}\u{1}\u{2}\u{3}\u{4}");
+    }
+
+    #[test]
+    fn read_aligned_string_no_8byte() {
+        let mut reader = Cursor::new([97, 98, 99, 1, 1, 2, 3]);
+        let result = read_aligned_string(&mut reader).expect("Could not read aligned string.");
+        assert_eq!(result, "abc\u{1}\u{1}\u{2}\u{3}");
+    }
+}
