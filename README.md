@@ -42,7 +42,7 @@ Options:
 
 - Checksum is not verified (archive and content files).
 - Owner and Group gets read but actually is not set to extracted files. (But file modes will be set)
-- Symlinks are unsupported. They are not part of the BFF file format, but of the liblpp.a file which is part of the BFF file.
+- Symlinks are unsupported. They are not part of the BFF file format, but of the liblpp.a file which is part of a install fileset.
 - Bad file format may be ignored in some cases.
 
 ## Credits
