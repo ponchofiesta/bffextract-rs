@@ -10,8 +10,6 @@ use std::{
 pub struct HuffmanDecoder<R> {
     /// Source reader containing compressed data
     reader: R,
-    /// Amount of bytes read while decompressing
-    total_read: usize,
     code: u8,
     level: usize,
     /// Amount of Huffman tree levels
@@ -33,7 +31,6 @@ impl<R: Read> HuffmanDecoder<R> {
     pub fn new(reader: R) -> Result<Self> {
         let mut decoder = HuffmanDecoder {
             reader,
-            total_read: 0,
             code: 0,
             level: 0,
             treelevels: 0,
@@ -53,7 +50,6 @@ impl<R: Read> HuffmanDecoder<R> {
         let mut buffer = vec![0; 1];
         self.reader.read_exact(&mut buffer)?;
         self.treelevels = buffer[0] as usize;
-        self.total_read = 1;
         self.inodesin = vec![0; self.treelevels];
         self.symbolsin = vec![0; self.treelevels];
         self.tree = vec![Vec::new(); self.treelevels];
@@ -66,8 +62,6 @@ impl<R: Read> HuffmanDecoder<R> {
             self.symbolsin[i] = buffer[0];
             self.symbol_size += self.symbolsin[i] as usize;
         }
-
-        self.total_read += self.treelevels as usize;
 
         if self.symbol_size > 256 {
             return Err(Error::BadSymbolTable.into());
@@ -82,7 +76,6 @@ impl<R: Read> HuffmanDecoder<R> {
                 symbol.push(buffer[0]);
             }
             self.tree[i as usize] = symbol;
-            self.total_read += self.symbolsin[i] as usize;
         }
 
         self.symbolsin[self.treelevels] += 1;
@@ -122,7 +115,6 @@ impl<R: Read> Read for HuffmanDecoder<R> {
                 Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(current_out),
                 _ => (),
             };
-            self.total_read += 1;
 
             for i in (0..=7).rev() {
                 self.code = (self.code << 1) | ((buffer[0] >> i) & 1);
