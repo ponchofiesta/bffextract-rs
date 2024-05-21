@@ -10,7 +10,7 @@
 //! 
 //! Open an archive file:
 //! 
-//! ```no_compile
+//! ```rust,no_compile
 //! let file = File::open("file.bff")?;
 //! let reader = BufReader::new(file);
 //! let mut archive = Archive::new(file)?;
@@ -18,20 +18,20 @@
 //! 
 //! Extract the whole archive:
 //! 
-//! ```no_compile
+//! ```rust,no_compile
 //! archive.extract("output_dir")?;
 //! ```
 //! 
 //! Print filenames of all records in the archive:
 //! 
-//! ```no_compile
+//! ```rust,no_compile
 //! archive.records().iter()
 //!     .for_each(|record| println!("{}", record.filename().display()));
 //! ```
 //! 
 //! Extract single file:
 //! 
-//! ```no_compile
+//! ```rust,no_compile
 //! archive.extract_file_by_name("./path/file", "output_dir")?;
 //! ```
 //! 
