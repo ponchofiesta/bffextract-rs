@@ -2,8 +2,7 @@
 
 use crate::{Error, Result};
 use std::{
-    cmp::min,
-    io::{ErrorKind, Read},
+    cmp::min, collections::VecDeque, io::{ErrorKind, Read}
 };
 
 /// A decoder for BFF file contents which is Huffman encoded.
@@ -21,7 +20,7 @@ pub struct HuffmanDecoder<R> {
     tree: Vec<Vec<u8>>,
     treelens: Vec<usize>,
     symbol_size: usize,
-    offset_buf: Vec<u8>,
+    offset_buf: VecDeque<u8>,
 }
 
 impl<R: Read> HuffmanDecoder<R> {
@@ -39,7 +38,7 @@ impl<R: Read> HuffmanDecoder<R> {
             tree: vec![],
             treelens: vec![],
             symbol_size: 0,
-            offset_buf: Vec::with_capacity(8),
+            offset_buf: VecDeque::with_capacity(8),
         };
         decoder.parse_header()?;
         Ok(decoder)
@@ -57,7 +56,6 @@ impl<R: Read> HuffmanDecoder<R> {
         self.symbol_size = 1;
 
         for i in 0..=self.treelevels {
-            //let byte = reader.bytes().next().unwrap_or(Ok(0)).unwrap();
             self.reader.read_exact(&mut buffer)?;
             self.symbolsin[i] = buffer[0];
             self.symbol_size += self.symbolsin[i] as usize;
@@ -104,10 +102,16 @@ impl<R: Read> Read for HuffmanDecoder<R> {
         let mut inlevelindex;
 
         // Read in extracted bytes from previous call
-        for i in 0..self.offset_buf.len() {
-            buf[i] = self.offset_buf[i];
+        let offset_read_len = min(buf_size, self.offset_buf.len());
+        for i in 0..offset_read_len {
+            buf[i] = match self.offset_buf.pop_front() {
+                Some(value) => value,
+                None => break,
+            }
         }
-        self.offset_buf = vec![];
+        if offset_read_len == buf_size {
+            return Ok(offset_read_len);
+        }
 
         // Read new bytes from input
         while current_out < buf_size {
@@ -129,7 +133,7 @@ impl<R: Read> Read for HuffmanDecoder<R> {
                     }
                     symbol = self.tree[self.level][inlevelindex];
                     if current_out >= buf_size {
-                        self.offset_buf.push(symbol);
+                        self.offset_buf.push_back(symbol);
                     } else {
                         buf[current_out] = symbol;
                     }
