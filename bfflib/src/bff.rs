@@ -92,7 +92,7 @@ pub struct RecordTrailer {
 }
 
 /// Read string from stream until NULL.
-pub fn read_aligned_string<R: ?Sized + Read>(reader: &mut R) -> Result<String> {
+pub(crate) fn read_aligned_string<R: ?Sized + Read>(reader: &mut R) -> Result<String> {
     let mut result: Vec<u8> = vec![];
     loop {
         let mut data = [0; 8];
