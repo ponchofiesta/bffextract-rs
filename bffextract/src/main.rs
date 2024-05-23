@@ -18,7 +18,7 @@ use std::{
     fs::File,
     io::{Read, Seek},
 };
-#[cfg(not(windows))]
+#[cfg(unix)]
 use users::{Groups, Users, UsersCache};
 
 /// Definition of command line arguments
@@ -64,7 +64,7 @@ struct Args {
 struct UserData;
 
 /// Helper to implement different user data retrivals by target OS.
-#[cfg(not(windows))]
+#[cfg(unix)]
 struct UserData {
     cache: UsersCache,
 }
@@ -87,7 +87,7 @@ impl UserData {
 }
 
 /// On non-Windows return the UNIX specific user data. On Windows always return `None`.
-#[cfg(not(windows))]
+#[cfg(unix)]
 impl UserData {
     pub fn new() -> Self {
         Self {
