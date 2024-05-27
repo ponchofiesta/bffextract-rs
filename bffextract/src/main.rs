@@ -204,10 +204,7 @@ fn main() -> Result<()> {
     }
     let reader = BufReader::new(reader);
     let mut archive = Archive::new(reader)?;
-    archive
-        .records()
-        .iter()
-        .for_each(|record| println!("{}", record.filename().display()));
+
     if args.list {
         print_content(&mut archive, &args.file_list, args.numeric);
     } else {
