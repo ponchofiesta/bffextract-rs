@@ -174,20 +174,24 @@ mod tests {
 
     #[test]
     fn decode_file() -> Result<()> {
-        let mut decoder = open_decoder("huffman.bin")?;
-        let mut decoded_file = File::open(get_resources_path().join("huffman.txt"))?;
-        let mut result = String::new();
-        decoder.read_to_string(&mut result)?;
-        let mut expected = String::new();
-        decoded_file.read_to_string(&mut expected)?;
+        let mut decoder = open_decoder("huffman_encoded.bin")?;
+        let mut decoded_file = File::open(get_resources_path().join("huffman_decoded.bin"))?;
+        let mut result = vec![];
+        decoder.read_to_end(&mut result)?;
+        println!("{}", result.len());
+        //println!("{result}");
+        let mut expected = vec![];
+        decoded_file.read_to_end(&mut expected)?;
+        println!("{}", expected.len());
+        //println!("{expected}");
         assert_eq!(result, expected);
         Ok(())
     }
 
     #[test]
     fn decode_read() -> Result<()> {
-        let mut decoded_file = File::open(get_resources_path().join("huffman.txt"))?;
-        let mut decoder = open_decoder("huffman.bin")?;
+        let mut decoded_file = File::open(get_resources_path().join("huffman_decoded.bin"))?;
+        let mut decoder = open_decoder("huffman_encoded.bin")?;
         let mut result = [0u8; 16];
         decoder.read(&mut result)?;
         let mut expected = [0u8; 16];
