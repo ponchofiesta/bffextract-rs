@@ -2,7 +2,9 @@
 
 use crate::{Error, Result};
 use std::{
-    cmp::min, collections::VecDeque, io::{ErrorKind, Read}
+    cmp::min,
+    collections::VecDeque,
+    io::{ErrorKind, Read},
 };
 
 /// A decoder for BFF file contents which is Huffman encoded.
@@ -152,20 +154,45 @@ impl<R: Read> Read for HuffmanDecoder<R> {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use std::{fs::File, io::Read, path::PathBuf};
+#[cfg(test)]
+mod tests {
+    use std::{fs::File, io::{Read, Result}, path::{Path, PathBuf}};
 
-//     use super::HuffmanDecoder;
+    use super::HuffmanDecoder;
 
-//     #[test]
-//     fn decode() -> std::io::Result<()> {
-//         let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-//         dir.push("../resources/test");
-//         let file = File::open(dir.join("test.txt.z"))?;
-//         let mut decoder = HuffmanDecoder::new(file).map_err(|e| std::io::Error::other(e))?;
-//         let mut result = String::new();
-//         decoder.read_to_string(&mut result)?;
-//         Ok(())
-//     }
-// }
+    fn get_resources_path() -> PathBuf {
+        let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        dir.push("../resources/test");
+        dir
+    }
+
+    fn open_decoder<P: AsRef<Path>>(filename: P) -> Result<impl Read> {
+        let file = File::open(get_resources_path().join(filename))?;
+        let decoder = HuffmanDecoder::new(file).map_err(|e| std::io::Error::other(e))?;
+        Ok(decoder)
+    }
+
+    #[test]
+    fn decode_file() -> Result<()> {
+        let mut decoder = open_decoder("huffman.bin")?;
+        let mut decoded_file = File::open(get_resources_path().join("huffman.txt"))?;
+        let mut result = String::new();
+        decoder.read_to_string(&mut result)?;
+        let mut expected = String::new();
+        decoded_file.read_to_string(&mut expected)?;
+        assert_eq!(result, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_read() -> Result<()> {
+        let mut decoded_file = File::open(get_resources_path().join("huffman.txt"))?;
+        let mut decoder = open_decoder("huffman.bin")?;
+        let mut result = [0u8; 16];
+        decoder.read(&mut result)?;
+        let mut expected = [0u8; 16];
+        decoded_file.read(&mut expected)?;
+        assert_eq!(result, expected);
+        Ok(())
+    }
+}
