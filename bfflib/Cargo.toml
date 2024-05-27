@@ -15,3 +15,6 @@ chrono = { workspace = true }
 file-mode = { workspace = true }
 filetime = { workspace = true }
 normalize-path = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

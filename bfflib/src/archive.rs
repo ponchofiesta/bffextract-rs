@@ -276,7 +276,7 @@ impl<'a> Read for RecordReader<'a> {
 }
 
 /// Container for all record data
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Record {
     data: RecordData,
     header: RecordHeader,
@@ -324,7 +324,7 @@ impl Record {
 }
 
 /// Transformed representation of a single fileset record (file or directory entry).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RecordData {
     /// Filename
     pub filename: PathBuf,
@@ -365,5 +365,128 @@ impl From<RecordHeader> for RecordData {
             file_position: 0,
             magic: value.magic,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Result;
+    use tempfile::tempdir;
+
+    fn open_bff_file<P: AsRef<Path>>(filename: P) -> Result<impl Read + Seek> {
+        let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        dir.push("../resources/test");
+        File::open(dir.join(filename))
+    }
+
+    #[test]
+    fn test_read_file_header() {
+        let mut file = open_bff_file("test.bff").unwrap();
+        
+        let result = read_file_header(&mut file);
+        
+        assert!(result.is_ok());
+        let header = result.unwrap();
+        let magic = header.magic;
+        assert_eq!(magic, FILE_MAGIC);
+    }
+
+    #[test]
+    fn test_read_next_record() {
+        let mut file = open_bff_file("test.bff").unwrap();
+        file.seek(SeekFrom::Start(72)).unwrap();
+        
+        let result = read_next_record(&mut file);
+        
+        assert!(result.is_ok());
+        let record = result.unwrap();
+        assert!(record.is_some());
+        let record = record.unwrap();
+        let magic = record.header.magic;
+        assert!(HEADER_MAGICS.contains(&magic));
+    }
+
+    #[test]
+    fn test_read_records() {
+        let mut file = open_bff_file("test.bff").unwrap();
+        file.seek(SeekFrom::Start(72)).unwrap();
+
+        let result = read_records(&mut file);
+        
+        assert!(result.is_ok());
+        let records = result.unwrap();
+        assert!(!records.is_empty());
+        assert_eq!(records.len(), 4);
+    }
+
+    #[test]
+    fn test_record_by_filename() {
+        let mut file = open_bff_file("test.bff").unwrap();
+        file.seek(SeekFrom::Start(72)).unwrap();
+
+        let records = read_records(&mut file).unwrap();
+
+        let filename = Path::new("backup/file.txt");
+        let record = record_by_filename(&records, filename);
+        
+        assert!(record.is_some());
+        let record = record.unwrap();
+        assert_eq!(record.filename(), filename);
+    }
+
+    #[test]
+    fn test_extract_file() {
+        let mut file = open_bff_file("test.bff").unwrap();
+        file.seek(SeekFrom::Start(72)).unwrap();
+
+        let temp_dir = tempdir().unwrap();
+        let dest_path = temp_dir.path().join("extracted_file.txt");
+        
+        let records = read_records(&mut file).unwrap();
+
+        let mut reader = make_record_reader(&mut file, &records[1]).unwrap().unwrap();
+        
+        let result = extract_file(&mut reader, &dest_path);
+        
+        assert!(result.is_ok());
+        assert!(dest_path.exists());
+    }
+
+    #[test]
+    fn test_make_record_reader_unsupported_filetype() {
+        let mut file = open_bff_file("test.bff").unwrap();
+        file.seek(SeekFrom::Start(72)).unwrap();
+        
+        let records = read_records(&mut file).unwrap();
+
+        let result = make_record_reader(&mut file, &records[0]);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_archive_creation() {
+        let file = open_bff_file("test.bff").unwrap();
+
+        let archive = Archive::new(file);
+        
+        assert!(archive.is_ok());
+        let archive = archive.unwrap();
+        assert!(!archive.records().is_empty());
+    }
+
+    #[test]
+    fn test_extract_file_by_name() {
+        let file = open_bff_file("test.bff").unwrap();
+
+        let temp_dir = tempdir().unwrap();
+        let dest_path = temp_dir.path().join("extracted_file.txt");
+        
+        let mut archive = Archive::new(file).unwrap();
+        let result = archive.extract_file_by_name("backup/file.txt", &dest_path);
+
+        assert!(result.is_ok());
+        assert!(dest_path.exists());
     }
 }
