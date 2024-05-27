@@ -178,12 +178,8 @@ mod tests {
         let mut decoded_file = File::open(get_resources_path().join("huffman_decoded.bin"))?;
         let mut result = vec![];
         decoder.read_to_end(&mut result)?;
-        println!("{}", result.len());
-        //println!("{result}");
         let mut expected = vec![];
         decoded_file.read_to_end(&mut expected)?;
-        println!("{}", expected.len());
-        //println!("{expected}");
         assert_eq!(result, expected);
         Ok(())
     }
