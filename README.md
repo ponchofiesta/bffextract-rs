@@ -30,12 +30,17 @@ Arguments:
   [FILE_LIST]...  Extract specific source file(s) and folders recursively only.
 
 Options:
-  -C, --chdir <CHDIR>  Extract to directory. [default: .]
-  -t, --list           List content of BFF archive.
-  -v, --verbose        Displays details while extracting.
-  -n, --numeric        List numeric user and group IDs.
-  -h, --help           Print help
-  -V, --version        Print version
+  -C, --chdir <CHDIR>            Extract to directory. [default: .]
+  -A, --attributes <ATTRIBUTES>  Restore only specified file attributes.
+                                 Possible values: p = permissions (unix only)
+                                                  o = owners (unix only)
+                                                  t = timestamps
+                                  [default: t]
+  -t, --list                     List content of BFF archive.
+  -v, --verbose                  Displays details while extracting.
+  -n, --numeric                  List numeric user and group IDs.
+  -h, --help                     Print help
+  -V, --version                  Print version
 ```
 
 ## Limitations
