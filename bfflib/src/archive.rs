@@ -530,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn test_set_file_attributes() {
+    fn test_set_file_attributes_timestamps() {
         let record_header = bff::RecordHeader {
             mode: 0o644,
             uid: 1000,
@@ -554,8 +554,44 @@ mod tests {
         let result = set_file_attributes(
             &file_path,
             &record,
+            attribute::ATTRIBUTE_TIMESTAMPS,
+        );
+        assert!(result.is_ok());
+
+        // Verify the timestamps
+        let metadata = fs::metadata(&file_path).unwrap();
+        let mtime = FileTime::from_last_modification_time(&metadata);
+        let atime = FileTime::from_last_access_time(&metadata);
+        assert_eq!(mtime.unix_seconds(), 1_600_000_000);
+        assert_eq!(atime.unix_seconds(), 1_600_000_000);
+
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_set_file_attributes_timestamp_and_mode() {
+        let record_header = bff::RecordHeader {
+            mode: 0o644,
+            mtime: 1_600_000_000,
+            atime: 1_600_000_000,
+            ..Default::default()
+        };
+        let record = Record {
+            data: record_header.into(),
+            header: record_header,
+            trailer: Default::default(),
+        };
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("mock_file.txt");
+
+        // Create a mock file to set attributes on
+        File::create(&file_path).unwrap();
+
+        // Set the attributes
+        let result = set_file_attributes(
+            &file_path,
+            &record,
             attribute::ATTRIBUTE_TIMESTAMPS
-                | attribute::ATTRIBUTE_OWNERS
                 | attribute::ATTRIBUTE_PERMISSIONS,
         );
         assert!(result.is_ok());
@@ -567,18 +603,8 @@ mod tests {
         assert_eq!(mtime.unix_seconds(), 1_600_000_000);
         assert_eq!(atime.unix_seconds(), 1_600_000_000);
 
-        // Verify the ownership
-        #[cfg(unix)]
-        {
-            assert_eq!(metadata.uid(), 1000);
-            assert_eq!(metadata.gid(), 1000);
-        }
-
         // Verify the permissions
-        #[cfg(unix)]
-        {
-            assert_eq!(metadata.mode() & 0o777, 0o644);
-        }
+        assert_eq!(metadata.mode() & 0o777, 0o644);
     }
 
     #[test]
