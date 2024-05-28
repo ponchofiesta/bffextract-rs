@@ -73,6 +73,31 @@ pub struct RecordHeader {
     pub unk3_c: u32,
 }
 
+impl Default for RecordHeader {
+    fn default() -> Self {
+        Self {
+            unk00: 0,
+            unk01: 0,
+            magic: 0,
+            unk04: 0,
+            unk08: 0,
+            mode: 0o644,
+            uid: 0,
+            gid: 0,
+            size: 0,
+            atime: 0,
+            mtime: 0,
+            time24: 0,
+            unk28: 0,
+            unk2_c: 0,
+            unk30: 0,
+            unk34: 0,
+            compressed_size: 0,
+            unk3_c: 0,
+        }
+    }
+}
+
 /// Representation of the data after each record header and record file name.
 ///
 /// Some data is not identified at the moment and named "unk*"
@@ -89,6 +114,23 @@ pub struct RecordTrailer {
     pub unk1_c: u32,
     pub unk20: u32,
     pub unk24: u32,
+}
+
+impl Default for RecordTrailer {
+    fn default() -> Self {
+        Self {
+            unk00: 0,
+            unk04:0,
+            unk08: 0,
+            unk0_c: 0,
+            unk10: 0,
+            unk14: 0,
+            unk18: 0,
+            unk1_c: 0,
+            unk20: 0,
+            unk24: 0,
+        }
+    }
 }
 
 /// Read string from stream until NULL.
@@ -131,7 +173,9 @@ mod tests {
 
     #[test]
     fn read_aligned_string_long() {
-        let mut reader = Cursor::new([97, 98, 99, 100, 101, 102, 103, 104, 97, 98, 99, 0, 1, 2, 3, 4]);
+        let mut reader = Cursor::new([
+            97, 98, 99, 100, 101, 102, 103, 104, 97, 98, 99, 0, 1, 2, 3, 4,
+        ]);
         let result = read_aligned_string(&mut reader).expect("Could not read aligned string.");
         assert_eq!(result, "abcdefghabc");
     }

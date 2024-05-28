@@ -12,7 +12,7 @@
 //! 
 //! ```rust
 //! use std::{fs::File, io::BufReader};
-//! use bfflib::{archive::Archive, Result};
+//! use bfflib::{attribute, archive::Archive, Result};
 //! 
 //! fn example() -> Result<()> {
 //!     // Open BFF file
@@ -29,12 +29,13 @@
 //!     archive.extract("output_dir")?;
 //! 
 //!     // Extract single file
-//!     archive.extract_file_by_name("./path/file", "output_dir")?;
+//!     archive.extract_file_by_name("./path/file", attribute::ATTRIBUTE_TIMESTAMPs, "output_dir")?;
 //! 
 //!     Ok(())
 //! }
 //! ```
 
+pub mod attribute;
 pub mod archive;
 pub mod bff;
 pub mod error;

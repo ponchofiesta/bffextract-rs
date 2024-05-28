@@ -1,3 +1,5 @@
+//! Reading an BFF archive
+
 use std::{
     fs::File,
     io::{self, copy, BufWriter, Read, Seek, SeekFrom, Take},
@@ -10,8 +12,11 @@ use file_mode::Mode;
 use file_mode::ModePath;
 use filetime::{set_file_times, FileTime};
 use normalize_path::NormalizePath;
+#[cfg(unix)]
+use std::os::unix::fs::chown;
 
 use crate::{
+    attribute,
     bff::{
         read_aligned_string, FileHeader, RecordHeader, RecordTrailer, FILE_MAGIC, HEADER_MAGICS,
         HUFFMAN_MAGIC,
@@ -125,6 +130,28 @@ fn make_record_reader<'a, R: Read + Seek>(
     }
 }
 
+fn set_file_attributes<P: AsRef<Path>>(path: P, record: &Record, attributes: u8) -> io::Result<()> {
+    if attributes & attribute::ATTRIBUTE_TIMESTAMPS > 0 {
+        set_file_times(
+            &path,
+            FileTime::from_unix_time(record.adate().and_utc().timestamp(), 0),
+            FileTime::from_unix_time(record.mdate().and_utc().timestamp(), 0),
+        )?;
+    }
+    #[cfg(unix)]
+    {
+        if attributes & attribute::ATTRIBUTE_OWNERS > 0 {
+            chown(&path, Some(record.uid()), Some(record.gid()))?;
+        }
+        if attributes & attribute::ATTRIBUTE_PERMISSIONS > 0 {
+            path.as_ref()
+                .set_mode(record.mode().mode())
+                .map_err(|err| io::Error::other(err))?;
+        }
+    }
+    Ok(())
+}
+
 /// A BFF archive
 pub struct Archive<R> {
     reader: R,
@@ -182,16 +209,22 @@ impl<R: Read + Seek> Archive<R> {
         &mut self,
         filename: P,
         destination: D,
+        attributes: u8,
     ) -> Result<()> {
         let record = self
             .record_by_filename(&filename)
             .ok_or(Error::FileNotFound)?
             .clone();
-        self.extract_file(&record, destination)
+        self.extract_file(&record, destination, attributes)
     }
 
     /// Extract a single file of the archive.
-    pub fn extract_file<D: AsRef<Path>>(&mut self, record: &Record, destination: D) -> Result<()> {
+    pub fn extract_file<D: AsRef<Path>>(
+        &mut self,
+        record: &Record,
+        destination: D,
+        attributes: u8,
+    ) -> Result<()> {
         match record.mode().file_type() {
             // Record contains a directory
             Some(t) if t.is_directory() => Ok(create_dir_all(&destination)?),
@@ -212,31 +245,25 @@ impl<R: Read + Seek> Archive<R> {
             _ => Err(Error::UnsupportedFileType),
         }?;
 
-        set_file_times(
-            &destination,
-            FileTime::from_unix_time(record.adate().and_utc().timestamp(), 0),
-            FileTime::from_unix_time(record.mdate().and_utc().timestamp(), 0),
-        )
-        .map_err(Error::IoError)?;
-
-        #[cfg(unix)]
-        destination
-            .as_ref()
-            .set_mode(record.mode().mode())
-            .map_err(|err| Error::ModeError(Box::new(err)))?;
+        set_file_attributes(&destination, record, attributes)?;
 
         Ok(())
     }
 
     /// Extract the whole archive to a target directory and filter the files by a callback function.
     pub fn extract<'a, P: AsRef<Path>>(&'a mut self, destination: P) -> Result<()> {
-        self.extract_when(destination, |_| true)
+        self.extract_when(destination, attribute::ATTRIBUTE_TIMESTAMPS, |_| true)
     }
 
     /// Extract the whole archive to a target directory and filter the files by a callback function.
     ///
     /// `when` is a callback function returning `true` to extract the record or `false` to skip the record.
-    pub fn extract_when<'a, P, C>(&'a mut self, destination: P, when: C) -> Result<()>
+    pub fn extract_when<'a, P, C>(
+        &'a mut self,
+        destination: P,
+        attributes: u8,
+        when: C,
+    ) -> Result<()>
     where
         P: AsRef<Path>,
         C: Fn(&Record) -> bool,
@@ -245,7 +272,7 @@ impl<R: Read + Seek> Archive<R> {
         for record in records {
             if when(&record) {
                 let target_path = destination.as_ref().join(record.filename()).normalize();
-                match self.extract_file(&record, &target_path) {
+                match self.extract_file(&record, &target_path, attributes) {
                     Err(e) => match e {
                         Error::EmptyFilename => eprintln!("{e}"),
                         Error::ModeError(ref _mode_error) => eprintln!("{e}"),
@@ -370,8 +397,12 @@ impl From<RecordHeader> for RecordData {
 
 #[cfg(test)]
 mod tests {
+    use crate::bff;
+
     use super::*;
-    use std::io::Result;
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    use std::{fs, io::Result};
     use tempfile::tempdir;
 
     fn open_bff_file<P: AsRef<Path>>(filename: P) -> Result<impl Read + Seek> {
@@ -383,9 +414,9 @@ mod tests {
     #[test]
     fn test_read_file_header() {
         let mut file = open_bff_file("test.bff").unwrap();
-        
+
         let result = read_file_header(&mut file);
-        
+
         assert!(result.is_ok());
         let header = result.unwrap();
         let magic = header.magic;
@@ -396,9 +427,9 @@ mod tests {
     fn test_read_next_record() {
         let mut file = open_bff_file("test.bff").unwrap();
         file.seek(SeekFrom::Start(72)).unwrap();
-        
+
         let result = read_next_record(&mut file);
-        
+
         assert!(result.is_ok());
         let record = result.unwrap();
         assert!(record.is_some());
@@ -413,7 +444,7 @@ mod tests {
         file.seek(SeekFrom::Start(72)).unwrap();
 
         let result = read_records(&mut file);
-        
+
         assert!(result.is_ok());
         let records = result.unwrap();
         assert!(!records.is_empty());
@@ -429,7 +460,7 @@ mod tests {
 
         let filename = Path::new("backup/file.txt");
         let record = record_by_filename(&records, filename);
-        
+
         assert!(record.is_some());
         let record = record.unwrap();
         assert_eq!(record.filename(), filename);
@@ -442,13 +473,13 @@ mod tests {
 
         let temp_dir = tempdir().unwrap();
         let dest_path = temp_dir.path().join("extracted_file.txt");
-        
+
         let records = read_records(&mut file).unwrap();
 
         let mut reader = make_record_reader(&mut file, &records[1]).unwrap().unwrap();
-        
+
         let result = extract_file(&mut reader, &dest_path);
-        
+
         assert!(result.is_ok());
         assert!(dest_path.exists());
     }
@@ -457,12 +488,64 @@ mod tests {
     fn test_make_record_reader_unsupported_filetype() {
         let mut file = open_bff_file("test.bff").unwrap();
         file.seek(SeekFrom::Start(72)).unwrap();
-        
+
         let records = read_records(&mut file).unwrap();
 
         let result = make_record_reader(&mut file, &records[0]);
-        
+
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_set_file_attributes() {
+        let record_header = bff::RecordHeader {
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+            mtime: 1_600_000_000,
+            atime: 1_600_000_000,
+            ..Default::default()
+        };
+        let record = Record {
+            data: record_header.into(),
+            header: record_header,
+            trailer: Default::default(),
+        };
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("mock_file.txt");
+
+        // Create a mock file to set attributes on
+        File::create(&file_path).unwrap();
+
+        // Set the attributes
+        let result = set_file_attributes(
+            &file_path,
+            &record,
+            attribute::ATTRIBUTE_TIMESTAMPS
+                | attribute::ATTRIBUTE_OWNERS
+                | attribute::ATTRIBUTE_PERMISSIONS,
+        );
+        assert!(result.is_ok());
+
+        // Verify the timestamps
+        let metadata = fs::metadata(&file_path).unwrap();
+        let mtime = FileTime::from_last_modification_time(&metadata);
+        let atime = FileTime::from_last_access_time(&metadata);
+        assert_eq!(mtime.unix_seconds(), 1_600_000_000);
+        assert_eq!(atime.unix_seconds(), 1_600_000_000);
+
+        // Verify the ownership
+        #[cfg(unix)]
+        {
+            assert_eq!(metadata.uid(), 1000);
+            assert_eq!(metadata.gid(), 1000);
+        }
+
+        // Verify the permissions
+        #[cfg(unix)]
+        {
+            assert_eq!(metadata.mode() & 0o777, 0o644);
+        }
     }
 
     #[test]
@@ -470,7 +553,7 @@ mod tests {
         let file = open_bff_file("test.bff").unwrap();
 
         let archive = Archive::new(file);
-        
+
         assert!(archive.is_ok());
         let archive = archive.unwrap();
         assert!(!archive.records().is_empty());
@@ -482,9 +565,10 @@ mod tests {
 
         let temp_dir = tempdir().unwrap();
         let dest_path = temp_dir.path().join("extracted_file.txt");
-        
+
         let mut archive = Archive::new(file).unwrap();
-        let result = archive.extract_file_by_name("backup/file.txt", &dest_path);
+        let result =
+            archive.extract_file_by_name("backup/file.txt", &dest_path, attribute::ATTRIBUTE_NONE);
 
         assert!(result.is_ok());
         assert!(dest_path.exists());

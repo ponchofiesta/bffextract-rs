@@ -9,9 +9,11 @@
 //! bffextract CLI tool to extract or list content of BFF files (Backup File Format).
 
 use bfflib::archive::{Archive, Record};
+use bfflib::attribute;
 use bfflib::{Error, Result};
 use clap::Parser;
 use comfy_table::{presets, CellAlignment, Row, Table};
+use core::result::Result as StdResult;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::{
@@ -20,6 +22,28 @@ use std::{
 };
 #[cfg(unix)]
 use users::{Groups, Users, UsersCache};
+
+/// Parse command line argument for attributes
+fn parse_attributes(value: &str) -> StdResult<u8, String> {
+    value
+        .chars()
+        .try_fold(attribute::ATTRIBUTE_NONE, |acc, ch| {
+            #[cfg(unix)]
+            match ch {
+                'n' => Ok(acc | attribute::ATTRIBUTE_NONE),
+                'p' => Ok(acc | attribute::ATTRIBUTE_PERMISSIONS),
+                'o' => Ok(acc | attribute::ATTRIBUTE_OWNERS),
+                't' => Ok(acc | attribute::ATTRIBUTE_TIMESTAMPS),
+                _ => return Err(format!("Invalid attribute '{ch}'.")),
+            }
+            #[cfg(windows)]
+            match ch {
+                'n' => Ok(acc | attribute::ATTRIBUTE_NONE),
+                't' => Ok(acc | attribute::ATTRIBUTE_TIMESTAMPS),
+                _ => return Err(format!("Invalid attribute '{ch}'.")),
+            }
+        })
+}
 
 /// Definition of command line arguments
 #[derive(Parser, Debug)]
@@ -33,6 +57,22 @@ struct Args {
 
     #[arg(short = 'C', long, default_value = ".", help = "Extract to directory.")]
     chdir: PathBuf,
+
+    #[arg(
+        short = 'A',
+        long,
+        default_value = "t",
+        value_parser = parse_attributes,
+        help = "a"
+
+    )]
+    attributes: u8,
+        // help = "
+        //         Restore only specified file attributes. 
+        //         Possible values:    p = permissions (unix only),
+        //                             o = owners (unix only), 
+        //                             t = timestamps
+        //         "
 
     #[arg(
         short = 't',
@@ -176,6 +216,7 @@ fn extract_records<R, P, D>(
     archive: &mut Archive<R>,
     filter_list: &[P],
     destination: D,
+    attributes: u8,
     verbose: bool,
 ) -> Result<()>
 where
@@ -183,7 +224,7 @@ where
     P: AsRef<Path>,
     D: AsRef<Path>,
 {
-    archive.extract_when(&destination, |inner_record| {
+    archive.extract_when(&destination, attributes, |inner_record| {
         let take = filter_list.is_empty()
             || filter_list
                 .iter()
@@ -208,7 +249,13 @@ fn main() -> Result<()> {
     if args.list {
         print_content(&mut archive, &args.file_list, args.numeric);
     } else {
-        extract_records(&mut archive, &args.file_list, args.chdir, args.verbose)?;
+        extract_records(
+            &mut archive,
+            &args.file_list,
+            args.chdir,
+            0,
+            args.verbose,
+        )?;
     }
 
     Ok(())
@@ -263,4 +310,29 @@ mod tests {
         );
         assert!(args.list);
     }
+
+    // #[test]
+    // fn source_with_attribute_timestamps() {
+    //     let args = Args::parse_from(["", "source", "-A", "t"]);
+    //     assert_eq!(args.filename.to_string_lossy(), "source");
+    //     assert_eq!(args.attributes, attribute::ATTRIBUTE_TIMESTAMPS);
+    // }
+
+    // #[cfg(unix)]
+    // #[test]
+    // fn source_with_attributes_timestamp_and_owner() {
+    //     let args = Args::parse_from(["", "source", "-A", "to"]);
+    //     assert_eq!(args.filename.to_string_lossy(), "source");
+    //     assert_eq!(
+    //         args.attributes,
+    //         attribute::ATTRIBUTE_OWNERS | attribute::ATTRIBUTE_TIMESTAMPS
+    //     );
+    // }
+
+    // #[test]
+    // fn source_with_attributes_none() {
+    //     let args = Args::parse_from(["", "source", "-A", "n"]);
+    //     assert_eq!(args.filename.to_string_lossy(), "source");
+    //     assert_eq!(args.attributes, attribute::ATTRIBUTE_NONE);
+    // }
 }

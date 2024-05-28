@@ -16,9 +16,9 @@ license = "MIT OR Apache-2.0"
 keywords = ["bff", "aix", "extract", "unpack", "decompress"]
 
 [workspace.dependencies]
-chrono = { version = "0.4.35", default-features = false, features = ["now"] }
-clap = { version = "4.5.3", default-features = false, features = ["derive", "std"] }
-comfy-table = { version = "7.1.0", default-features = false }
+chrono = { version = "0.4.38", default-features = false, features = ["now"] }
+clap = { version = "4.5.4", default-features = false, features = ["derive", "std"] }
+comfy-table = { version = "7.1.1", default-features = false }
 file-mode = "0.1.2"
 filetime = "0.2.23"
 normalize-path = "0.2.1"
