@@ -63,16 +63,12 @@ struct Args {
         long,
         default_value = "t",
         value_parser = parse_attributes,
-        help = "a"
-
+        help = concat!("Restore only specified file attributes.\n",
+               "Possible values: p = permissions (unix only)\n",
+               "                 o = owners (unix only)\n",
+               "                 t = timestamps\n")
     )]
     attributes: u8,
-        // help = "
-        //         Restore only specified file attributes. 
-        //         Possible values:    p = permissions (unix only),
-        //                             o = owners (unix only), 
-        //                             t = timestamps
-        //         "
 
     #[arg(
         short = 't',
@@ -224,7 +220,7 @@ where
     P: AsRef<Path>,
     D: AsRef<Path>,
 {
-    archive.extract_when(&destination, attributes, |inner_record| {
+    archive.extract_when_with_attr(&destination, attributes, |inner_record| {
         let take = filter_list.is_empty()
             || filter_list
                 .iter()
@@ -311,28 +307,28 @@ mod tests {
         assert!(args.list);
     }
 
-    // #[test]
-    // fn source_with_attribute_timestamps() {
-    //     let args = Args::parse_from(["", "source", "-A", "t"]);
-    //     assert_eq!(args.filename.to_string_lossy(), "source");
-    //     assert_eq!(args.attributes, attribute::ATTRIBUTE_TIMESTAMPS);
-    // }
+    #[test]
+    fn source_with_attribute_timestamps() {
+        let args = Args::parse_from(["", "source", "-A", "t"]);
+        assert_eq!(args.filename.to_string_lossy(), "source");
+        assert_eq!(args.attributes, attribute::ATTRIBUTE_TIMESTAMPS);
+    }
 
-    // #[cfg(unix)]
-    // #[test]
-    // fn source_with_attributes_timestamp_and_owner() {
-    //     let args = Args::parse_from(["", "source", "-A", "to"]);
-    //     assert_eq!(args.filename.to_string_lossy(), "source");
-    //     assert_eq!(
-    //         args.attributes,
-    //         attribute::ATTRIBUTE_OWNERS | attribute::ATTRIBUTE_TIMESTAMPS
-    //     );
-    // }
+    #[cfg(unix)]
+    #[test]
+    fn source_with_attributes_timestamp_and_owner() {
+        let args = Args::parse_from(["", "source", "-A", "to"]);
+        assert_eq!(args.filename.to_string_lossy(), "source");
+        assert_eq!(
+            args.attributes,
+            attribute::ATTRIBUTE_OWNERS | attribute::ATTRIBUTE_TIMESTAMPS
+        );
+    }
 
-    // #[test]
-    // fn source_with_attributes_none() {
-    //     let args = Args::parse_from(["", "source", "-A", "n"]);
-    //     assert_eq!(args.filename.to_string_lossy(), "source");
-    //     assert_eq!(args.attributes, attribute::ATTRIBUTE_NONE);
-    // }
+    #[test]
+    fn source_with_attributes_none() {
+        let args = Args::parse_from(["", "source", "-A", "n"]);
+        assert_eq!(args.filename.to_string_lossy(), "source");
+        assert_eq!(args.attributes, attribute::ATTRIBUTE_NONE);
+    }
 }

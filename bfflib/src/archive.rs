@@ -209,17 +209,35 @@ impl<R: Read + Seek> Archive<R> {
         &mut self,
         filename: P,
         destination: D,
+    ) -> Result<()> {
+        self.extract_file_by_name_with_attr(filename, destination, attribute::ATTRIBUTE_DEFAULT)
+    }
+
+    /// Extract a single file of the archive by filename and set file modes to be extracted.
+    pub fn extract_file_by_name_with_attr<P: AsRef<Path>, D: AsRef<Path>>(
+        &mut self,
+        filename: P,
+        destination: D,
         attributes: u8,
     ) -> Result<()> {
         let record = self
             .record_by_filename(&filename)
             .ok_or(Error::FileNotFound)?
             .clone();
-        self.extract_file(&record, destination, attributes)
+        self.extract_file_with_attr(&record, destination, attributes)
     }
 
     /// Extract a single file of the archive.
     pub fn extract_file<D: AsRef<Path>>(
+        &mut self,
+        record: &Record,
+        destination: D,
+    ) -> Result<()> {
+        self.extract_file_with_attr(record, destination, attribute::ATTRIBUTE_DEFAULT)
+    }
+
+    /// Extract a single file of the archive and set file modes to be extracted
+    pub fn extract_file_with_attr<D: AsRef<Path>>(
         &mut self,
         record: &Record,
         destination: D,
@@ -252,13 +270,28 @@ impl<R: Read + Seek> Archive<R> {
 
     /// Extract the whole archive to a target directory and filter the files by a callback function.
     pub fn extract<'a, P: AsRef<Path>>(&'a mut self, destination: P) -> Result<()> {
-        self.extract_when(destination, attribute::ATTRIBUTE_TIMESTAMPS, |_| true)
+        self.extract_when(destination, |_| true)
     }
 
     /// Extract the whole archive to a target directory and filter the files by a callback function.
     ///
     /// `when` is a callback function returning `true` to extract the record or `false` to skip the record.
     pub fn extract_when<'a, P, C>(
+        &'a mut self,
+        destination: P,
+        when: C,
+    ) -> Result<()>
+    where
+        P: AsRef<Path>,
+        C: Fn(&Record) -> bool,
+    {
+        self.extract_when_with_attr(destination, attribute::ATTRIBUTE_DEFAULT, when)
+    }
+
+    /// Extract the whole archive to a target directory and filter the files by a callback function and set file modes to be extracted.
+    ///
+    /// `when` is a callback function returning `true` to extract the record or `false` to skip the record.
+    pub fn extract_when_with_attr<'a, P, C>(
         &'a mut self,
         destination: P,
         attributes: u8,
@@ -272,7 +305,7 @@ impl<R: Read + Seek> Archive<R> {
         for record in records {
             if when(&record) {
                 let target_path = destination.as_ref().join(record.filename()).normalize();
-                match self.extract_file(&record, &target_path, attributes) {
+                match self.extract_file_with_attr(&record, &target_path, attributes) {
                     Err(e) => match e {
                         Error::EmptyFilename => eprintln!("{e}"),
                         Error::ModeError(ref _mode_error) => eprintln!("{e}"),
@@ -568,7 +601,7 @@ mod tests {
 
         let mut archive = Archive::new(file).unwrap();
         let result =
-            archive.extract_file_by_name("backup/file.txt", &dest_path, attribute::ATTRIBUTE_NONE);
+            archive.extract_file_by_name_with_attr("backup/file.txt", &dest_path, attribute::ATTRIBUTE_NONE);
 
         assert!(result.is_ok());
         assert!(dest_path.exists());

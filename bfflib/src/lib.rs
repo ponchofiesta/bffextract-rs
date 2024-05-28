@@ -29,7 +29,7 @@
 //!     archive.extract("output_dir")?;
 //! 
 //!     // Extract single file
-//!     archive.extract_file_by_name("./path/file", attribute::ATTRIBUTE_TIMESTAMPs, "output_dir")?;
+//!     archive.extract_file_by_name("./path/file", "output_dir")?;
 //! 
 //!     Ok(())
 //! }
