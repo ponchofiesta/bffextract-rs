@@ -115,11 +115,22 @@ fn make_record_reader<'a, R: Read + Seek>(
     reader: &'a mut R,
     record: &Record,
 ) -> Result<Option<RecordReader<'a>>> {
+    make_record_reader_raw(reader, record, false)
+}
+
+/// Create a reader for contents of a record
+/// 
+/// Set `raw = true` to read the bytes as is without decoding huffman encoded data.
+fn make_record_reader_raw<'a, R: Read + Seek>(
+    reader: &'a mut R,
+    record: &Record,
+    raw: bool,
+) -> Result<Option<RecordReader<'a>>> {
     match record.mode().file_type() {
         Some(t) if t.is_regular_file() => {
             reader.seek(SeekFrom::Start(record.file_position() as u64))?;
             let take = (reader as &mut dyn Read).take(record.compressed_size() as u64);
-            let record_reader = if record.magic() == HUFFMAN_MAGIC {
+            let record_reader = if record.magic() == HUFFMAN_MAGIC && !raw {
                 RecordReader::Huffman(HuffmanDecoder::new(take)?)
             } else {
                 RecordReader::Raw(take)
@@ -202,6 +213,15 @@ impl<R: Read + Seek> Archive<R> {
             .ok_or(Error::FileNotFound)?
             .clone();
         make_record_reader(&mut self.reader, &record)
+    }
+
+    /// Creates a raw reader for a specific file without decoding.
+    pub fn raw_file<'a, P: AsRef<Path>>(&'a mut self, filename: P) -> Result<Option<RecordReader<'a>>> {
+        let record = self
+            .record_by_filename(&filename)
+            .ok_or(Error::FileNotFound)?
+            .clone();
+        make_record_reader_raw(&mut self.reader, &record, true)
     }
 
     /// Extract a single file of the archive by filename.
