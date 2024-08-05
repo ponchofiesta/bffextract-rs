@@ -249,7 +249,7 @@ fn main() -> Result<()> {
             &mut archive,
             &args.file_list,
             args.chdir,
-            0,
+            args.attributes,
             args.verbose,
         )?;
     }
