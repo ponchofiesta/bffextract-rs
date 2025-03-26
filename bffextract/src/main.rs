@@ -194,13 +194,19 @@ fn print_content<R: Read + Seek, P: AsRef<Path>>(
                 .unwrap_or(format!("{}", record.gid()))
         };
 
+        let filename = record.filename().to_string_lossy().to_string();
+        let print_filename = match record.symlink() {
+            Some(symlink) => format!("{} -> {}", filename, symlink.display()),
+            None => filename,
+        };
+
         table.add_row(vec![
             format!("{}", record.mode()),
             username,
             groupname,
             format!("{}", record.size()),
             record.mdate().format(date_format).to_string(),
-            record.filename().to_string_lossy().to_string(),
+            print_filename,
         ]);
     }
 

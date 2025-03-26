@@ -7,13 +7,15 @@ use std::{
 };
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use file_mode::Mode;
 #[cfg(unix)]
 use file_mode::ModePath;
+use file_mode::{FileType, Mode};
 use filetime::{set_file_times, FileTime};
 use normalize_path::NormalizePath;
 #[cfg(unix)]
 use std::os::unix::fs::chown;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 
 use crate::{
     attribute,
@@ -22,7 +24,7 @@ use crate::{
         HUFFMAN_MAGIC,
     },
     huffman::HuffmanDecoder,
-    util::{self, create_dir_all},
+    util::{self, create_dir_all, create_parent_dir_all},
 };
 use crate::{Error, Result};
 
@@ -47,6 +49,13 @@ fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Option<Record>> {
         return Err(Error::InvalidRecordMagic(record_header.magic));
     }
     let filename = read_aligned_string(reader)?;
+
+    // Record is a symlink and we need to read the symlink target too
+    let mut symlink = None;
+    if record_header.mode & 0xF000 == 0xA000 {
+        symlink = Some(read_aligned_string(reader)?);
+    }
+
     let record_trailer: RecordTrailer = util::read_struct(reader)?;
     let position = reader.stream_position()?;
     if record_header.size > 0 {
@@ -59,6 +68,9 @@ fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Option<Record>> {
 
     let mut record_data: RecordData = record_header.into();
     record_data.filename = PathBuf::from(filename);
+    if let Some(symlink) = symlink {
+        record_data.symlink = Some(PathBuf::from(symlink));
+    }
     record_data.file_position = position as u32;
 
     let record = Record {
@@ -119,7 +131,7 @@ fn make_record_reader<'a, R: Read + Seek>(
 }
 
 /// Create a reader for contents of a record
-/// 
+///
 /// Set `raw = true` to read the bytes as is without decoding huffman encoded data.
 fn make_record_reader_raw<'a, R: Read + Seek>(
     reader: &'a mut R,
@@ -137,7 +149,10 @@ fn make_record_reader_raw<'a, R: Read + Seek>(
             };
             Ok(Some(record_reader))
         }
-        _ => Err(Error::UnsupportedFileType),
+        _ => Err(Error::UnsupportedFileType(format!(
+            "{:?}",
+            record.mode().file_type()
+        ))),
     }
 }
 
@@ -216,7 +231,10 @@ impl<R: Read + Seek> Archive<R> {
     }
 
     /// Creates a raw reader for a specific file without decoding.
-    pub fn raw_file<'a, P: AsRef<Path>>(&'a mut self, filename: P) -> Result<Option<RecordReader<'a>>> {
+    pub fn raw_file<'a, P: AsRef<Path>>(
+        &'a mut self,
+        filename: P,
+    ) -> Result<Option<RecordReader<'a>>> {
         let record = self
             .record_by_filename(&filename)
             .ok_or(Error::FileNotFound)?
@@ -248,11 +266,7 @@ impl<R: Read + Seek> Archive<R> {
     }
 
     /// Extract a single file of the archive.
-    pub fn extract_file<D: AsRef<Path>>(
-        &mut self,
-        record: &Record,
-        destination: D,
-    ) -> Result<()> {
+    pub fn extract_file<D: AsRef<Path>>(&mut self, record: &Record, destination: D) -> Result<()> {
         self.extract_file_with_attr(record, destination, attribute::ATTRIBUTE_DEFAULT)
     }
 
@@ -268,24 +282,51 @@ impl<R: Read + Seek> Archive<R> {
             Some(t) if t.is_directory() => Ok(create_dir_all(&destination)?),
             // Record cotnains a file
             Some(t) if t.is_regular_file() => {
-                let parent = destination
-                    .as_ref()
-                    .parent()
-                    .ok_or(Error::MissingParentDir(
-                        destination.as_ref().to_string_lossy().to_string(),
-                    ))?;
-                create_dir_all(parent)?;
+                create_parent_dir_all(&destination)?;
                 let mut reader =
                     make_record_reader(&mut self.reader, &record)?.ok_or(Error::FileNotFound)?;
                 extract_file(&mut reader, &destination)
             }
+            // Record contains a symbolic link
+            #[cfg(unix)]
+            Some(t) if t.is_symbolic_link() => {
+                create_parent_dir_all(&destination)?;
+                symlink(&destination, record.symlink().unwrap())?;
+                Ok(())
+            }
+            Some(t) if self.is_unsupported_filetype(t) =>
+            {
+                create_parent_dir_all(&destination)?;
+                eprintln!(
+                    "{}: Unsupported file type {:?}. Will create an empty file instead.",
+                    record.filename().display(),
+                    record.mode().file_type()
+                );
+                File::create(&destination)?;
+                Ok(())
+            }
             // Record contains something else -> unsupported
-            _ => Err(Error::UnsupportedFileType),
+            _ => Err(Error::UnsupportedFileType(format!(
+                "{:?}",
+                record.mode().file_type()
+            ))),
         }?;
 
         set_file_attributes(&destination, record, attributes)?;
 
         Ok(())
+    }
+
+    fn is_unsupported_filetype(&self, filetype: FileType) -> bool {
+        let unsup = filetype.is_block_device()
+            || filetype.is_character_device()
+            || filetype.is_fifo()
+            || filetype.is_socket();
+
+        #[cfg(windows)]
+        let unsup = unsup || filetype.is_symbolic_link();
+
+        unsup
     }
 
     /// Extract the whole archive to a target directory and filter the files by a callback function.
@@ -296,11 +337,7 @@ impl<R: Read + Seek> Archive<R> {
     /// Extract the whole archive to a target directory and filter the files by a callback function.
     ///
     /// `when` is a callback function returning `true` to extract the record or `false` to skip the record.
-    pub fn extract_when<'a, P, C>(
-        &'a mut self,
-        destination: P,
-        when: C,
-    ) -> Result<()>
+    pub fn extract_when<'a, P, C>(&'a mut self, destination: P, when: C) -> Result<()>
     where
         P: AsRef<Path>,
         C: Fn(&Record) -> bool,
@@ -326,12 +363,9 @@ impl<R: Read + Seek> Archive<R> {
             if when(&record) {
                 let target_path = destination.as_ref().join(record.filename()).normalize();
                 match self.extract_file_with_attr(&record, &target_path, attributes) {
-                    Err(e) => match e {
-                        Error::EmptyFilename => eprintln!("{e}"),
-                        Error::ModeError(ref _mode_error) => eprintln!("{e}"),
-                        Error::MissingParentDir(ref _path) => eprintln!("{e}"),
-                        _ => return Err(e),
-                    },
+                    Err(e) => {
+                        eprintln!("{}: {e}", record.filename().display());
+                    }
                     _ => (),
                 }
             }
@@ -366,6 +400,9 @@ pub struct Record {
 impl Record {
     pub fn filename(&self) -> &Path {
         &self.data.filename
+    }
+    pub fn symlink(&self) -> Option<&Path> {
+        self.data.symlink.as_ref().map(|pb| pb.as_ref())
     }
     pub fn compressed_size(&self) -> u32 {
         self.data.compressed_size
@@ -408,6 +445,7 @@ impl Record {
 pub struct RecordData {
     /// Filename
     pub filename: PathBuf,
+    pub symlink: Option<PathBuf>,
     /// Compressed file size
     pub compressed_size: u32,
     /// Decompressed file size.
@@ -431,6 +469,7 @@ impl From<RecordHeader> for RecordData {
     fn from(value: RecordHeader) -> Self {
         RecordData {
             filename: "".into(),
+            symlink: None,
             compressed_size: value.compressed_size,
             size: value.size,
             mode: Mode::from(value.mode),
@@ -571,11 +610,7 @@ mod tests {
         File::create(&file_path).unwrap();
 
         // Set the attributes
-        let result = set_file_attributes(
-            &file_path,
-            &record,
-            attribute::ATTRIBUTE_TIMESTAMPS,
-        );
+        let result = set_file_attributes(&file_path, &record, attribute::ATTRIBUTE_TIMESTAMPS);
         assert!(result.is_ok());
 
         // Verify the timestamps
@@ -584,7 +619,6 @@ mod tests {
         let atime = FileTime::from_last_access_time(&metadata);
         assert_eq!(mtime.unix_seconds(), 1_600_000_000);
         assert_eq!(atime.unix_seconds(), 1_600_000_000);
-
     }
 
     #[cfg(unix)]
@@ -611,8 +645,7 @@ mod tests {
         let result = set_file_attributes(
             &file_path,
             &record,
-            attribute::ATTRIBUTE_TIMESTAMPS
-                | attribute::ATTRIBUTE_PERMISSIONS,
+            attribute::ATTRIBUTE_TIMESTAMPS | attribute::ATTRIBUTE_PERMISSIONS,
         );
         assert!(result.is_ok());
 
@@ -646,8 +679,11 @@ mod tests {
         let dest_path = temp_dir.path().join("extracted_file.txt");
 
         let mut archive = Archive::new(file).unwrap();
-        let result =
-            archive.extract_file_by_name_with_attr("backup/file.txt", &dest_path, attribute::ATTRIBUTE_NONE);
+        let result = archive.extract_file_by_name_with_attr(
+            "backup/file.txt",
+            &dest_path,
+            attribute::ATTRIBUTE_NONE,
+        );
 
         assert!(result.is_ok());
         assert!(dest_path.exists());

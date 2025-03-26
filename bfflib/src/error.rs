@@ -25,7 +25,7 @@ pub enum Error {
     /// A filename was not found in archive
     FileNotFound,
     /// A record contains unsupported file type
-    UnsupportedFileType,
+    UnsupportedFileType(String),
 
     // Extraction errors
     /// File system entry mode could not be set. Typically should contain a `std::io::error`.
@@ -68,7 +68,7 @@ impl Display for Error {
                 write!(f, "Invalid file format: Invalid tree levels.")
             }
             FileNotFound => write!(f, "Filename wasn't found in archive."),
-            UnsupportedFileType => write!(f, "The file type of the record is unsupported."),
+            UnsupportedFileType(s) => write!(f, "The file type of the record is unsupported: {s}."),
 
             // Extraction errors
             ModeError(mode_error) => {

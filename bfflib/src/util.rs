@@ -1,7 +1,7 @@
 use std::{fs, mem};
 use std::path::Path;
 use std::slice::from_raw_parts_mut;
-use std::io::{Read, Result};
+use std::io::{Error, Read, Result};
 
 /// Read binary data from a stream `reader` and map the bytes on the resulting
 /// struct. Target struct needs to be packed.
@@ -25,6 +25,16 @@ pub(crate) fn create_dir_all<P: AsRef<Path>>(path: P) -> Result<()> {
         }
     }
     Ok(fs::create_dir_all(&path)?)
+}
+
+/// Create the parent directory of the given path and all of its parent directories if needed.
+/// If the parent directory already exists, it will not be modified.
+pub(crate) fn create_parent_dir_all<D: AsRef<Path>>(destination: &D) -> Result<()> {
+    let parent = destination
+        .as_ref()
+        .parent()
+        .ok_or(Error::other(format!("Missing parent directory for {}", destination.as_ref().display())))?;
+    create_dir_all(parent)
 }
 
 #[cfg(test)]

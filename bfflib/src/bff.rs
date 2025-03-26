@@ -140,14 +140,25 @@ pub(crate) fn read_aligned_string<R: ?Sized + Read>(reader: &mut R) -> Result<St
         let mut data = [0; 8];
         let len = reader.read(&mut data)?;
         if len == 0 {
-            return Ok(String::from_utf8_lossy(&result).into());
+            let s = String::from_utf8_lossy(&result);
+            return Ok(first_segment(&s));
         }
         for c in data {
             if c == 0 {
-                return Ok(String::from_utf8_lossy(&result).into());
+                let s = String::from_utf8_lossy(&result);
+                return Ok(first_segment(&s));
             }
             result.push(c);
         }
+    }
+}
+
+/// Get the first segment of a string until a newline, tab, or vertical tab.
+fn first_segment(text: &str) -> String {
+    if let Some(index) = text.find(|c| matches!(c, '\n' | '\t' | '\x0B')) {
+        text[..index].to_string()
+    } else {
+        text.to_string()
     }
 }
 

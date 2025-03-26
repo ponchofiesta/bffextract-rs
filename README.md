@@ -14,7 +14,8 @@ cargo install bffextract
 
 ### Binary download
 
-Each release is available in compiled binary from Github. Linux build is using MUSL toolchain to make it work on older libc versions (e.g. CentOS 7) too.
+Each release is available in compiled binary from Github. Linux build is using
+MUSL toolchain to make it work on older libc versions (e.g. CentOS 7) too.
 
 https://github.com/ponchofiesta/bffextract-rs/releases
 
@@ -46,7 +47,8 @@ Options:
 ## Limitations
 
 - Checksum is not verified (archive and content files).
-- Symlinks are unsupported. They are not part of the BFF file format, but of the liblpp.a file which is part of a install fileset.
+- Symlinks are unsupported on Windows. Character devices, block devices,
+  sockets and fifo are unsupported. I don't see a need for them.
 - Bad file format may be ignored in some cases.
 
 ## Credits
