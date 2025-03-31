@@ -13,9 +13,7 @@ use file_mode::{FileType, Mode};
 use filetime::{set_file_times, FileTime};
 use normalize_path::NormalizePath;
 #[cfg(unix)]
-use std::os::unix::fs::chown;
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{chown, symlink};
 
 use crate::{
     attribute,
@@ -294,8 +292,7 @@ impl<R: Read + Seek> Archive<R> {
                 symlink(&destination, record.symlink().unwrap())?;
                 Ok(())
             }
-            Some(t) if self.is_unsupported_filetype(t) =>
-            {
+            Some(t) if self.is_unsupported_filetype(t) => {
                 create_parent_dir_all(&destination)?;
                 eprintln!(
                     "{}: Unsupported file type {:?}. Will create an empty file instead.",
