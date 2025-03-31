@@ -22,7 +22,7 @@ jobs:
           artifact_name=$(yq .package.name bffextract/Cargo.toml)
           echo "artifact_name=$artifact_name" >> $GITHUB_OUTPUT
           echo "version=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
- 
+
   build-and-publish:
     name: Build and publish for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -38,7 +38,7 @@ jobs:
             pack: Compress-Archive -DestinationPath ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip -Path target\release\${{ needs.pre.outputs.artifact_name }}.exe, README.md, LICENSE-MIT, LICENSE-APACHE
             asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip
             build: cargo build --release --locked
-          - os: macos-12
+          - os: macos-13
             pack: tar czf ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-macos.tar.gz target/release/${{ needs.pre.outputs.artifact_name }} README.md LICENSE-MIT LICENSE-APACHE
             asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-macos.tar.gz
             build: cargo build --release --locked
