@@ -93,6 +93,14 @@ struct Args {
         help = "List numeric user and group IDs."
     )]
     numeric: bool,
+
+    #[arg(
+        short = 'a',
+        long,
+        default_value_t = false,
+        help = "Print ACL of records in AIX text format."
+    )]
+    acl: bool,
 }
 
 /// Helper to implement different user data retrivals by target OS.
@@ -141,6 +149,52 @@ impl UserData {
         self.cache
             .get_group_by_gid(gid)
             .and_then(|group| group.name().to_os_string().into_string().ok())
+    }
+}
+
+/// Print ACL entries for all matching records in AIX text format.
+fn print_acls<R: Read + Seek, P: AsRef<Path>>(
+    archive: &mut Archive<R>,
+    filter_list: &[P],
+    numeric: bool,
+) {
+    let user_data = UserData::new();
+    let records: Vec<Record> = archive
+        .records()
+        .into_iter()
+        .filter(|record| {
+            record.acl().is_some()
+                && (filter_list.is_empty()
+                    || filter_list.iter().any(|p| record.filename().starts_with(p)))
+        })
+        .cloned()
+        .collect();
+
+    for record in &records {
+        let output = record.format_acl(
+            |id| {
+                if numeric {
+                    id.to_string()
+                } else {
+                    user_data
+                        .get_username_by_uid(id)
+                        .unwrap_or_else(|| id.to_string())
+                }
+            },
+            |id| {
+                if numeric {
+                    id.to_string()
+                } else {
+                    user_data
+                        .get_groupname_by_gid(id)
+                        .unwrap_or_else(|| id.to_string())
+                }
+            },
+        );
+        if let Some(output) = output {
+            println!("{output}");
+            println!();
+        }
     }
 }
 
@@ -254,6 +308,11 @@ fn main() -> Result<()> {
 
     if args.list {
         print_content(&mut archive, &args.file_list, args.numeric);
+        if args.acl {
+            print_acls(&mut archive, &args.file_list, args.numeric);
+        }
+    } else if args.acl {
+        print_acls(&mut archive, &args.file_list, args.numeric);
     } else {
         extract_records(
             &mut archive,
@@ -270,6 +329,13 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+
+    fn open_bff_file(filename: &str) -> BufReader<File> {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("../resources/test");
+        BufReader::new(File::open(path.join(filename)).unwrap())
+    }
 
     #[test]
     fn source_without_specifc() {
@@ -340,5 +406,40 @@ mod tests {
         let args = Args::parse_from(["", "source", "-A", "n"]);
         assert_eq!(args.filename.to_string_lossy(), "source");
         assert_eq!(args.attributes, attribute::ATTRIBUTE_NONE);
+    }
+
+    #[test]
+    fn acl_mixed_sample_formats_aixc_acl_as_aixc() {
+        let archive = Archive::new(open_bff_file("acl_aixc_nfs4.bff")).unwrap();
+        let records = archive.records();
+        let record = records
+            .iter()
+            .find(|record| record.filename() == Path::new("acl/aixc"))
+            .unwrap();
+
+        let output = record
+            .format_acl(|id| id.to_string(), |id| id.to_string())
+            .unwrap();
+
+        assert!(output.contains("* ACL_type   AIXC"));
+        assert!(output.contains("base permissions"));
+        assert!(output.contains("permit   rw-     g:214"));
+    }
+
+    #[test]
+    fn acl_mixed_sample_formats_nfs4_acl_as_nfs4() {
+        let archive = Archive::new(open_bff_file("acl_aixc_nfs4.bff")).unwrap();
+        let records = archive.records();
+        let record = records
+            .iter()
+            .find(|record| record.filename() == Path::new("acl/nfs4"))
+            .unwrap();
+
+        let output = record
+            .format_acl(|id| id.to_string(), |id| id.to_string())
+            .unwrap();
+
+        assert!(output.contains("* ACL_type   NFS4"));
+        assert!(output.contains("s:(OWNER@):     a       rwpRWxDaAdcCs   fidi"));
     }
 }

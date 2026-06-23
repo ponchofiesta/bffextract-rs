@@ -156,7 +156,7 @@ pub(crate) fn read_aligned_string<R: ?Sized + Read>(reader: &mut R) -> Result<St
 
 /// Get the first segment of a string until a newline, tab, or vertical tab.
 fn first_segment(text: &str) -> String {
-    if let Some(index) = text.find(|c| matches!(c, '\n' | '\t' | '\x0B')) {
+    if let Some(index) = text.find(|c| matches!(c, '\n' | '\t' | '\x0B' | '\x7F')) {
         text[..index].to_string()
     } else {
         text.to_string()
@@ -197,6 +197,13 @@ mod tests {
         let mut reader = Cursor::new([97, 98, 99, 1, 1, 2, 3, 4]);
         let result = read_aligned_string(&mut reader).expect("Could not read aligned string.");
         assert_eq!(result, "abc\u{1}\u{1}\u{2}\u{3}\u{4}");
+    }
+
+    #[test]
+    fn read_aligned_string_stops_at_delete_marker() {
+        let mut reader = Cursor::new([97, 99, 108, 47, 127, 127, 0, 0]);
+        let result = read_aligned_string(&mut reader).expect("Could not read aligned string.");
+        assert_eq!(result, "acl/");
     }
 
     #[test]

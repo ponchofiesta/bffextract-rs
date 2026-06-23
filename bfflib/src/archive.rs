@@ -26,6 +26,8 @@ use crate::{
 };
 use crate::{Error, Result};
 
+const AIXC_ACL_MODE_FLAG: u32 = 0x0000_0800;
+
 /// Read BFF [FileHeader] from the reader
 fn read_file_header<R: Read>(reader: &mut R) -> Result<FileHeader> {
     let file_header: FileHeader = util::read_struct(reader)?;
@@ -92,6 +94,65 @@ fn parse_acl_payload(buf: &[u8], num_entries: u32) -> (u16, u16, u16, Vec<AclEnt
     (owner_perm, group_perm, everyone_perm, entries)
 }
 
+fn parse_nfs4_acl_payload(buf: &[u8], num_entries: u32) -> Vec<Nfs4AclEntry> {
+    const ACE_SIZE: usize = 16;
+    const IDENTIFIER_GROUP: u32 = 0x40;
+    const WHO_OWNER_OR_GROUP: u32 = 0xFFFF_FFFF;
+    const WHO_EVERYONE: u32 = 0xFFFF_FFFE;
+
+    let mut entries = Vec::with_capacity(num_entries as usize);
+
+    for index in 0..num_entries as usize {
+        let offset = index * ACE_SIZE;
+        if offset + ACE_SIZE > buf.len() {
+            break;
+        }
+
+        let ace_type = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap());
+        let ace_flags = u32::from_le_bytes(buf[offset + 4..offset + 8].try_into().unwrap());
+        let access_mask = u32::from_le_bytes(buf[offset + 8..offset + 12].try_into().unwrap());
+        let who = u32::from_le_bytes(buf[offset + 12..offset + 16].try_into().unwrap());
+
+        let principal = if who == WHO_OWNER_OR_GROUP {
+            if ace_flags & IDENTIFIER_GROUP != 0 {
+                Nfs4AclPrincipal::GroupOwner
+            } else {
+                Nfs4AclPrincipal::Owner
+            }
+        } else if who == WHO_EVERYONE {
+            Nfs4AclPrincipal::Everyone
+        } else if ace_flags & IDENTIFIER_GROUP != 0 {
+            Nfs4AclPrincipal::Group(who)
+        } else {
+            Nfs4AclPrincipal::User(who)
+        };
+
+        entries.push(Nfs4AclEntry {
+            principal,
+            ace_type,
+            ace_flags,
+            access_mask,
+        });
+    }
+
+    entries
+}
+
+fn is_nfs4_acl_payload(buf: &[u8], num_entries: u32) -> bool {
+    const ACE_SIZE: usize = 16;
+
+    num_entries > 0 && buf.len() == num_entries as usize * ACE_SIZE
+}
+
+fn align_reader_to_eight<R: Seek>(reader: &mut R) -> Result<()> {
+    let position = reader.stream_position()?;
+    let aligned = (position + 7) & !7;
+    if aligned > position {
+        reader.seek(SeekFrom::Start(aligned))?;
+    }
+    Ok(())
+}
+
 /// Read next [Record] from the reader
 fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Option<Record>> {
     let record_header: RecordHeader = util::read_struct(reader)?;
@@ -132,6 +193,19 @@ fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Option<Record>> {
         } else {
             None
         };
+
+    if record_header.mode & S_IXACL > 0 && record_trailer.acl_len > 0 {
+        let acl_len = record_trailer.acl_len as usize;
+        let padded_acl_len = (acl_len + 15) & !15;
+        let acl_padding = padded_acl_len.saturating_sub(acl_len);
+        if acl_padding > 0 {
+            reader.seek(SeekFrom::Current(acl_padding as i64))?;
+        }
+    }
+
+    // Variable-length ACL payloads are padded to the next 8-byte boundary
+    // before the file data or next record begins.
+    align_reader_to_eight(reader)?;
 
     let position = reader.stream_position()?;
     if record_header.size > 0 {
@@ -267,7 +341,8 @@ impl<R: Read + Seek> Archive<R> {
     pub fn new(mut reader: R) -> Result<Self> {
         let header = read_file_header(&mut reader)?;
         let records_start_pos = reader.stream_position()?;
-        let records = read_records(&mut reader)?;
+        let mut records = read_records(&mut reader)?;
+        attach_nfs4_acl_texts(&mut reader, &mut records)?;
         let archive = Self {
             reader,
             header,
@@ -510,6 +585,18 @@ impl Record {
         self.data.acl.as_ref()
     }
 
+    pub fn format_acl<F, G>(&self, resolve_uid: F, resolve_gid: G) -> Option<String>
+    where
+        F: Fn(u32) -> String,
+        G: Fn(u32) -> String,
+    {
+        let acl = self.acl()?;
+        Some(match acl.kind() {
+            AclKind::Nfs4 => format_acl_nfs4(self, acl, &resolve_uid, &resolve_gid),
+            AclKind::Aixc => format_acl_aixc(self, acl, &resolve_uid, &resolve_gid),
+        })
+    }
+
     pub fn header(&self) -> &RecordHeader {
         &self.header
     }
@@ -548,11 +635,22 @@ pub struct RecordData {
 impl RecordData {
     pub fn new(header: RecordHeader, trailer: RecordTrailer, acl_payload: Option<Vec<u8>>) -> Self {
         let acl = if header.mode & S_IXACL > 0 {
-            let (owner_perm, group_perm, everyone_perm, entries) =
+            let (owner_perm, group_perm, everyone_perm, entries, nfs4_entries) =
                 if let Some(buf) = acl_payload {
-                    parse_acl_payload(&buf, trailer.num_entries)
+                    if is_nfs4_acl_payload(&buf, trailer.num_entries) {
+                        (
+                            0,
+                            0,
+                            0,
+                            vec![],
+                            parse_nfs4_acl_payload(&buf, trailer.num_entries),
+                        )
+                    } else {
+                        let (o, g, e, ent) = parse_acl_payload(&buf, trailer.num_entries);
+                        (o, g, e, ent, vec![])
+                    }
                 } else {
-                    (0, 0, 0, vec![])
+                    (0, 0, 0, vec![], vec![])
                 };
             Some(AclData {
                 num_entries: trailer.num_entries,
@@ -563,6 +661,8 @@ impl RecordData {
                 group_perm,
                 everyone_perm,
                 entries,
+                nfs4_entries,
+                text: None,
             })
         } else {
             None
@@ -613,12 +713,39 @@ pub struct AclEntry {
 impl AclEntry {
     /// Returns `true` if this entry grants access (allow ACE).
     pub fn is_allow(&self) -> bool {
-        self.access_word & 0x8000 != 0
+        self.access_word & 0xC000 != 0
     }
 
     /// Returns the rwx permission bits (0–7).
     pub fn rwx(&self) -> u8 {
         (self.access_word & 0x7) as u8
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Nfs4AclPrincipal {
+    Owner,
+    GroupOwner,
+    Everyone,
+    User(u32),
+    Group(u32),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Nfs4AclEntry {
+    pub principal: Nfs4AclPrincipal,
+    pub ace_type: u32,
+    pub ace_flags: u32,
+    pub access_mask: u32,
+}
+
+impl Nfs4AclEntry {
+    pub fn is_allow(&self) -> bool {
+        self.ace_type == 0
+    }
+
+    pub fn inheritance_flags(&self) -> u32 {
+        self.ace_flags & 0x0F
     }
 }
 
@@ -640,6 +767,236 @@ pub struct AclData {
     pub everyone_perm: u16,
     /// Named user / group ACL entries (extended entries beyond the three base identities).
     pub entries: Vec<AclEntry>,
+    /// Parsed NFS4 ACL entries.
+    pub nfs4_entries: Vec<Nfs4AclEntry>,
+    /// Optional ACL text preserved from synthetic ACL records.
+    pub text: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AclKind {
+    Aixc,
+    Nfs4,
+}
+
+impl AclData {
+    pub fn kind(&self) -> AclKind {
+        if !self.nfs4_entries.is_empty() || self.text.is_some() {
+            AclKind::Nfs4
+        } else if self.owner_perm != 0
+            || self.group_perm != 0
+            || self.everyone_perm != 0
+            || !self.entries.is_empty()
+        {
+            AclKind::Aixc
+        } else if self.acl_mode & AIXC_ACL_MODE_FLAG != 0 {
+            AclKind::Aixc
+        } else if self.acl_mode & S_IXACL != 0 {
+            AclKind::Nfs4
+        } else {
+            AclKind::Aixc
+        }
+    }
+}
+
+fn rwx_to_string(bits: u16) -> String {
+    format!(
+        "{}{}{}",
+        if bits & 0b100 != 0 { 'r' } else { '-' },
+        if bits & 0b010 != 0 { 'w' } else { '-' },
+        if bits & 0b001 != 0 { 'x' } else { '-' },
+    )
+}
+
+fn nfs4_access_to_string(mask: u32) -> String {
+    const BITS: &[(u32, char)] = &[
+        (0x00001, 'r'),
+        (0x00002, 'w'),
+        (0x00004, 'p'),
+        (0x00008, 'R'),
+        (0x00010, 'W'),
+        (0x00020, 'x'),
+        (0x00040, 'D'),
+        (0x00080, 'a'),
+        (0x00100, 'A'),
+        (0x00200, 'd'),
+        (0x00400, 'c'),
+        (0x00800, 'C'),
+        (0x01000, 'o'),
+        (0x02000, 's'),
+    ];
+    BITS.iter()
+        .filter(|(bit, _)| mask & bit != 0)
+        .map(|(_, ch)| *ch)
+        .collect()
+}
+
+fn nfs4_flags_to_string(flags: u32) -> String {
+    let mut s = String::new();
+    if flags & 0x01 != 0 {
+        s.push_str("fi");
+    }
+    if flags & 0x02 != 0 {
+        s.push_str("di");
+    }
+    if flags & 0x04 != 0 {
+        s.push_str("np");
+    }
+    if flags & 0x08 != 0 {
+        s.push_str("io");
+    }
+    if s.is_empty() {
+        s.push_str("----");
+    }
+    s
+}
+
+fn format_acl_aixc<F, G>(record: &Record, acl: &AclData, resolve_uid: &F, resolve_gid: &G) -> String
+where
+    F: Fn(u32) -> String,
+    G: Fn(u32) -> String,
+{
+    let mut lines = vec![
+        format!("{}:", record.filename().display()),
+        "*".to_string(),
+        "* ACL_type   AIXC".to_string(),
+        "*".to_string(),
+        "base permissions".to_string(),
+        format!(
+            "        owner({}): {}",
+            resolve_uid(record.uid()),
+            rwx_to_string(acl.owner_perm)
+        ),
+        format!(
+            "        group({}): {}",
+            resolve_gid(record.gid()),
+            rwx_to_string(acl.group_perm)
+        ),
+        format!("        others: {}", rwx_to_string(acl.everyone_perm)),
+    ];
+
+    if !acl.entries.is_empty() {
+        lines.push("extended permissions".to_string());
+        lines.push("        enabled".to_string());
+        for entry in &acl.entries {
+            let action = if entry.is_allow() { "permit" } else { "deny  " };
+            let perms = rwx_to_string(entry.rwx() as u16);
+            let principal = match &entry.principal_type {
+                AclPrincipalType::User => format!("u:{}", resolve_uid(entry.principal_id)),
+                AclPrincipalType::Group => format!("g:{}", resolve_gid(entry.principal_id)),
+                AclPrincipalType::Unknown(_) => format!("?:{}", entry.principal_id),
+            };
+            lines.push(format!("        {}   {}     {}", action, perms, principal));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn format_acl_nfs4<F, G>(record: &Record, acl: &AclData, resolve_uid: &F, resolve_gid: &G) -> String
+where
+    F: Fn(u32) -> String,
+    G: Fn(u32) -> String,
+{
+    if let Some(text) = &acl.text {
+        return format!("{}:\n{}", record.filename().display(), text.trim_end());
+    }
+
+    let mut lines = vec![
+        format!("{}:", record.filename().display()),
+        "*".to_string(),
+        "* ACL_type   NFS4".to_string(),
+        "*".to_string(),
+        "*".to_string(),
+        format!("* Owner: {}", resolve_uid(record.uid())),
+        format!("* Group: {}", resolve_gid(record.gid())),
+        "*".to_string(),
+    ];
+
+    for entry in &acl.nfs4_entries {
+        let action = if entry.is_allow() { "a" } else { "d" };
+        let perms = nfs4_access_to_string(entry.access_mask);
+        let flags = nfs4_flags_to_string(entry.inheritance_flags());
+
+        let principal = match entry.principal {
+            Nfs4AclPrincipal::Owner => "s:(OWNER@)".to_string(),
+            Nfs4AclPrincipal::GroupOwner => "s:(GROUP@)".to_string(),
+            Nfs4AclPrincipal::Everyone => "s:(EVERYONE@)".to_string(),
+            Nfs4AclPrincipal::User(uid) => format!("u:{}", resolve_uid(uid)),
+            Nfs4AclPrincipal::Group(gid) => format!("g:{}", resolve_gid(gid)),
+        };
+
+        lines.push(format!("{}:\t{}\t{}\t{}", principal, action, perms, flags));
+    }
+
+    lines.join("\n")
+}
+
+pub fn format_acl_aix_text<F, G>(record: &Record, resolve_uid: F, resolve_gid: G) -> Option<String>
+where
+    F: Fn(u32) -> String,
+    G: Fn(u32) -> String,
+{
+    record.format_acl(resolve_uid, resolve_gid)
+}
+
+fn maybe_read_record_text<R: Read + Seek>(
+    reader: &mut R,
+    record: &Record,
+) -> Result<Option<String>> {
+    if !record
+        .mode()
+        .file_type()
+        .is_some_and(|file_type| file_type.is_regular_file())
+    {
+        return Ok(None);
+    }
+
+    reader.seek(SeekFrom::Start(record.file_position() as u64))?;
+    let mut take = (reader as &mut dyn Read).take(record.compressed_size() as u64);
+    let mut buf = Vec::with_capacity(record.compressed_size() as usize);
+    take.read_to_end(&mut buf)?;
+
+    Ok(String::from_utf8(buf).ok())
+}
+
+fn attach_nfs4_acl_texts<R: Read + Seek>(reader: &mut R, records: &mut [Record]) -> Result<()> {
+    let mut pending_nfs4 = Vec::new();
+
+    for index in 0..records.len() {
+        if records[index]
+            .acl()
+            .is_some_and(|acl| acl.acl_mode & AIXC_ACL_MODE_FLAG == 0)
+        {
+            pending_nfs4.push(index);
+        }
+
+        let is_synthetic_acl_record = records[index]
+            .mode()
+            .file_type()
+            .is_some_and(|file_type| file_type.is_regular_file())
+            && records[index].filename().to_string_lossy().ends_with('/');
+
+        if !is_synthetic_acl_record {
+            continue;
+        }
+
+        let Some(text) = maybe_read_record_text(reader, &records[index])? else {
+            continue;
+        };
+
+        if !text.starts_with("*\n* ACL_type   NFS4") {
+            continue;
+        }
+
+        if let Some(target_index) = pending_nfs4.pop() {
+            if let Some(acl) = records[target_index].data.acl.as_mut() {
+                acl.text = Some(text);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -945,6 +1302,53 @@ mod tests {
     }
 
     #[test]
+    fn test_acl_aixc_nfs4_reads_all_records() {
+        let file = open_bff_file("acl_aixc_nfs4.bff").unwrap();
+        let archive = Archive::new(file).unwrap();
+        let records = archive.records();
+
+        let names: Vec<_> = records
+            .iter()
+            .map(|record| record.filename().to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(names.len(), 6);
+        assert_eq!(
+            names,
+            vec![
+                "acl",
+                "acl/aixc",
+                "acl/aixc.txt",
+                "acl/nfs4",
+                "acl/nfs4.txt",
+                "acl/",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_acl_aixc_nfs4_detects_acl_kinds() {
+        let file = open_bff_file("acl_aixc_nfs4.bff").unwrap();
+        let archive = Archive::new(file).unwrap();
+        let records = archive.records();
+
+        assert_eq!(records[1].acl().unwrap().kind(), AclKind::Aixc);
+        assert_eq!(records[3].acl().unwrap().kind(), AclKind::Nfs4);
+    }
+
+    #[test]
+    fn test_acl_aixc_nfs4_preserves_nfs4_text_payload() {
+        let file = open_bff_file("acl_aixc_nfs4.bff").unwrap();
+        let archive = Archive::new(file).unwrap();
+        let acl = archive.records()[3].acl().unwrap();
+
+        assert!(acl
+            .text
+            .as_deref()
+            .is_some_and(|text| text.starts_with("*\n* ACL_type   NFS4")));
+    }
+
+    #[test]
     fn test_parse_acl_payload_no_extended_entries() {
         // 3 base identities only (num_entries=3): just the 8-byte base header
         let payload: Vec<u8> = vec![
@@ -983,5 +1387,80 @@ mod tests {
         assert_eq!(entries[0].rwx(), 7);
         assert_eq!(entries[0].principal_id, 100);
     }
-}
 
+    #[test]
+    fn test_parse_nfs4_acl_payload_special_and_group_entries() {
+        let payload: Vec<u8> = vec![
+            0x00, 0x00, 0x00, 0x00, // ace_type = allow
+            0x03, 0x00, 0x00, 0x00, // ace_flags = fi|di
+            0x27, 0x00, 0x00, 0x00, // access_mask = rwp+x
+            0xff, 0xff, 0xff, 0xff, // OWNER@
+            0x01, 0x00, 0x00, 0x00, // ace_type = deny
+            0x40, 0x00, 0x00, 0x00, // ace_flags = IDENTIFIER_GROUP
+            0x01, 0x00, 0x00, 0x00, // access_mask = r
+            0xd2, 0x04, 0x00, 0x00, // gid = 1234
+        ];
+
+        let entries = parse_nfs4_acl_payload(&payload, 2);
+
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].is_allow());
+        assert_eq!(entries[0].principal, Nfs4AclPrincipal::Owner);
+        assert_eq!(entries[0].inheritance_flags(), 0x03);
+        assert_eq!(entries[0].access_mask, 0x27);
+
+        assert!(!entries[1].is_allow());
+        assert_eq!(entries[1].principal, Nfs4AclPrincipal::Group(1234));
+    }
+
+    #[test]
+    fn test_is_nfs4_acl_payload_requires_full_ace_array() {
+        assert!(!is_nfs4_acl_payload(&[0u8; 32], 3));
+        assert!(is_nfs4_acl_payload(&[0u8; 32], 2));
+    }
+
+    #[test]
+    fn test_acl_kind_prefers_parsed_compact_acl_shape() {
+        let file = open_bff_file("test_acl.bff").unwrap();
+        let archive = Archive::new(file).unwrap();
+        let acl = archive.records()[0].acl().unwrap();
+
+        assert_eq!(acl.kind(), AclKind::Aixc);
+    }
+
+    #[test]
+    fn test_format_acl_aix_text_formats_aixc() {
+        let file = open_bff_file("acl_aixc_nfs4.bff").unwrap();
+        let archive = Archive::new(file).unwrap();
+        let records = archive.records();
+        let record = records
+            .iter()
+            .find(|record| record.filename() == Path::new("acl/aixc"))
+            .unwrap();
+
+        let output = record
+            .format_acl(|uid| uid.to_string(), |gid| gid.to_string())
+            .unwrap();
+
+        assert!(output.contains("* ACL_type   AIXC"));
+        assert!(output.contains("permit   rw-     g:214"));
+    }
+
+    #[test]
+    fn test_format_acl_aix_text_formats_nfs4() {
+        let file = open_bff_file("acl_aixc_nfs4.bff").unwrap();
+        let archive = Archive::new(file).unwrap();
+        let records = archive.records();
+        let record = records
+            .iter()
+            .find(|record| record.filename() == Path::new("acl/nfs4"))
+            .unwrap();
+
+        let output = record
+            .format_acl(|uid| uid.to_string(), |gid| gid.to_string())
+            .unwrap();
+
+        assert!(output.contains("* ACL_type   NFS4"));
+        assert!(output.contains("s:(OWNER@):     a       rwpRWxDaAdcCs   fidi"));
+    }
+}
