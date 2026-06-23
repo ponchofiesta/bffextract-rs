@@ -4,19 +4,53 @@ use std::{
     path::Path,
 };
 
-use filetime::{set_file_times, FileTime};
 #[cfg(unix)]
 use file_mode::ModePath;
+use filetime::{set_file_times, FileTime};
 #[cfg(unix)]
 use std::os::unix::fs::chown;
 
 use crate::{
-    archive::Record,
-    attribute,
-    bff::HUFFMAN_MAGIC,
-    huffman::HuffmanDecoder,
-    Error, Result,
+    archive::Record, attribute, bff::HUFFMAN_MAGIC, huffman::HuffmanDecoder, Error, Result,
 };
+
+pub(crate) struct ArchiveSource<R> {
+    reader: R,
+}
+
+impl<R> ArchiveSource<R> {
+    pub(crate) fn new(reader: R) -> Self {
+        Self { reader }
+    }
+}
+
+impl<R: Read + Seek> ArchiveSource<R> {
+    pub(crate) fn open<'a>(&'a mut self, record: &Record) -> Result<Option<RecordReader<'a>>> {
+        open_record_reader(&mut self.reader, record, false)
+    }
+
+    pub(crate) fn open_raw<'a>(&'a mut self, record: &Record) -> Result<Option<RecordReader<'a>>> {
+        open_record_reader(&mut self.reader, record, true)
+    }
+
+    pub(crate) fn read_text(&mut self, record: &Record) -> Result<Option<String>> {
+        if !record
+            .mode()
+            .file_type()
+            .is_some_and(|file_type| file_type.is_regular_file())
+        {
+            return Ok(None);
+        }
+
+        self.reader
+            .seek(SeekFrom::Start(record.file_position() as u64))?;
+        let mut take = (&mut self.reader as &mut dyn Read).take(record.compressed_size() as u64);
+        let mut buf = Vec::with_capacity(record.compressed_size() as usize);
+        take.read_to_end(&mut buf)?;
+
+        Ok(String::from_utf8(buf).ok())
+    }
+}
 
 /// A reader to handle different file types
 pub enum RecordReader<'a> {
@@ -40,18 +74,7 @@ pub(crate) fn extract_file<R: Read, D: AsRef<Path>>(reader: &mut R, destination:
     copy(reader, &mut writer).map(|_| ()).map_err(Into::into)
 }
 
-/// Create a reader for contents of a record.
-pub(crate) fn make_record_reader<'a, R: Read + Seek>(
-    reader: &'a mut R,
-    record: &Record,
-) -> Result<Option<RecordReader<'a>>> {
-    make_record_reader_raw(reader, record, false)
-}
-
-/// Create a reader for contents of a record.
-///
-/// Set `raw = true` to read the bytes as is without decoding huffman encoded data.
-pub(crate) fn make_record_reader_raw<'a, R: Read + Seek>(
+fn open_record_reader<'a, R: Read + Seek>(
     reader: &'a mut R,
     record: &Record,
     raw: bool,

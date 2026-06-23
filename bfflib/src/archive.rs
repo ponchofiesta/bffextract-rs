@@ -19,13 +19,14 @@ use crate::{
         read_aligned_string, FileHeader, RecordHeader, RecordTrailer, FILE_MAGIC, HEADER_MAGICS,
         S_IXACL, TRAILER_INLINE_ACL_BYTES,
     },
-    extract::{extract_file, make_record_reader, make_record_reader_raw, set_file_attributes},
+    extract::{extract_file, set_file_attributes, ArchiveSource},
     util::{self, create_dir_all, create_parent_dir_all},
 };
 use crate::{Error, Result};
 
 pub use crate::acl::{
-    AclData, AclEntry, AclKind, AclPrincipalType, Nfs4AclEntry, Nfs4AclPrincipal,
+    AclData, AclEntry, AclKind, AclMetadata, AclPrincipalType, AixcAcl, AixcPermissions, Nfs4Acl,
+    Nfs4AclEntry, Nfs4AclPrincipal,
 };
 pub use crate::extract::RecordReader;
 
@@ -157,9 +158,15 @@ fn record_by_filename<'a, P: AsRef<Path>>(
         .find(|record| record.filename() == filename.as_ref())
 }
 
+fn record_index_by_filename<P: AsRef<Path>>(records: &[Record], filename: P) -> Option<usize> {
+    records
+        .iter()
+        .position(|record| record.filename() == filename.as_ref())
+}
+
 /// A BFF archive
 pub struct Archive<R> {
-    reader: R,
+    source: ArchiveSource<R>,
     header: FileHeader,
     records_start_pos: u64,
     records: Vec<Record>,
@@ -173,7 +180,7 @@ impl<R: Read + Seek> Archive<R> {
         let mut records = read_records(&mut reader)?;
         attach_nfs4_acl_texts(&mut reader, &mut records)?;
         let archive = Self {
-            reader,
+            source: ArchiveSource::new(reader),
             header,
             records_start_pos,
             records,
@@ -182,8 +189,8 @@ impl<R: Read + Seek> Archive<R> {
     }
 
     /// Returns the archive records
-    pub fn records(&self) -> Vec<&Record> {
-        self.records.iter().collect()
+    pub fn records(&self) -> &[Record] {
+        &self.records
     }
 
     /// Returns the [FileHeader] of the archive
@@ -201,13 +208,17 @@ impl<R: Read + Seek> Archive<R> {
         record_by_filename(&self.records, filename)
     }
 
+    fn record_index_by_filename<P: AsRef<Path>>(&self, filename: P) -> Option<usize> {
+        record_index_by_filename(&self.records, filename)
+    }
+
     /// Creates a reader for a specific file.
     pub fn file<'a, P: AsRef<Path>>(&'a mut self, filename: P) -> Result<Option<RecordReader<'a>>> {
-        let record = self
-            .record_by_filename(&filename)
-            .ok_or(Error::FileNotFound)?
-            .clone();
-        make_record_reader(&mut self.reader, &record)
+        let index = self
+            .record_index_by_filename(&filename)
+            .ok_or(Error::FileNotFound)?;
+        let (source, records) = (&mut self.source, &self.records);
+        source.open(&records[index])
     }
 
     /// Creates a raw reader for a specific file without decoding.
@@ -215,11 +226,11 @@ impl<R: Read + Seek> Archive<R> {
         &'a mut self,
         filename: P,
     ) -> Result<Option<RecordReader<'a>>> {
-        let record = self
-            .record_by_filename(&filename)
-            .ok_or(Error::FileNotFound)?
-            .clone();
-        make_record_reader_raw(&mut self.reader, &record, true)
+        let index = self
+            .record_index_by_filename(&filename)
+            .ok_or(Error::FileNotFound)?;
+        let (source, records) = (&mut self.source, &self.records);
+        source.open_raw(&records[index])
     }
 
     /// Extract a single file of the archive by filename.
@@ -238,11 +249,11 @@ impl<R: Read + Seek> Archive<R> {
         destination: D,
         attributes: u8,
     ) -> Result<()> {
-        let record = self
-            .record_by_filename(&filename)
-            .ok_or(Error::FileNotFound)?
-            .clone();
-        self.extract_file_with_attr(&record, destination, attributes)
+        let index = self
+            .record_index_by_filename(&filename)
+            .ok_or(Error::FileNotFound)?;
+        let (source, records) = (&mut self.source, &self.records);
+        extract_record_with_attr(source, &records[index], destination, attributes)
     }
 
     /// Extract a single file of the archive.
@@ -257,55 +268,7 @@ impl<R: Read + Seek> Archive<R> {
         destination: D,
         attributes: u8,
     ) -> Result<()> {
-        match record.mode().file_type() {
-            // Record contains a directory
-            Some(t) if t.is_directory() => Ok(create_dir_all(&destination)?),
-            // Record cotnains a file
-            Some(t) if t.is_regular_file() => {
-                create_parent_dir_all(&destination)?;
-                let mut reader =
-                    make_record_reader(&mut self.reader, &record)?.ok_or(Error::FileNotFound)?;
-                extract_file(&mut reader, &destination)
-            }
-            // Record contains a symbolic link
-            #[cfg(unix)]
-            Some(t) if t.is_symbolic_link() => {
-                create_parent_dir_all(&destination)?;
-                symlink(&destination, record.symlink().unwrap())?;
-                Ok(())
-            }
-            Some(t) if self.is_unsupported_filetype(t) => {
-                create_parent_dir_all(&destination)?;
-                eprintln!(
-                    "{}: Unsupported file type {:?}. Will create an empty file instead.",
-                    record.filename().display(),
-                    record.mode().file_type()
-                );
-                File::create(&destination)?;
-                Ok(())
-            }
-            // Record contains something else -> unsupported
-            _ => Err(Error::UnsupportedFileType(format!(
-                "{:?}",
-                record.mode().file_type()
-            ))),
-        }?;
-
-        set_file_attributes(&destination, record, attributes)?;
-
-        Ok(())
-    }
-
-    fn is_unsupported_filetype(&self, filetype: FileType) -> bool {
-        let unsup = filetype.is_block_device()
-            || filetype.is_character_device()
-            || filetype.is_fifo()
-            || filetype.is_socket();
-
-        #[cfg(windows)]
-        let unsup = unsup || filetype.is_symbolic_link();
-
-        unsup
+        extract_record_with_attr(&mut self.source, record, destination, attributes)
     }
 
     /// Extract the whole archive to a target directory and filter the files by a callback function.
@@ -337,11 +300,11 @@ impl<R: Read + Seek> Archive<R> {
         P: AsRef<Path>,
         C: Fn(&Record) -> bool,
     {
-        let records: Vec<_> = self.records.iter().cloned().collect();
-        for record in records {
+        let source = &mut self.source;
+        for record in self.records.iter() {
             if when(&record) {
                 let target_path = destination.as_ref().join(record.filename()).normalize();
-                match self.extract_file_with_attr(&record, &target_path, attributes) {
+                match extract_record_with_attr(source, record, &target_path, attributes) {
                     Err(e) => {
                         eprintln!("{}: {e}", record.filename().display());
                     }
@@ -351,6 +314,58 @@ impl<R: Read + Seek> Archive<R> {
         }
         Ok(())
     }
+}
+
+fn extract_record_with_attr<R: Read + Seek, D: AsRef<Path>>(
+    source: &mut ArchiveSource<R>,
+    record: &Record,
+    destination: D,
+    attributes: u8,
+) -> Result<()> {
+    match record.mode().file_type() {
+        Some(file_type) if file_type.is_directory() => Ok(create_dir_all(&destination)?),
+        Some(file_type) if file_type.is_regular_file() => {
+            create_parent_dir_all(&destination)?;
+            let mut reader = source.open(record)?.ok_or(Error::FileNotFound)?;
+            extract_file(&mut reader, &destination)
+        }
+        #[cfg(unix)]
+        Some(file_type) if file_type.is_symbolic_link() => {
+            create_parent_dir_all(&destination)?;
+            symlink(&destination, record.symlink().unwrap())?;
+            Ok(())
+        }
+        Some(file_type) if is_unsupported_filetype(file_type) => {
+            create_parent_dir_all(&destination)?;
+            eprintln!(
+                "{}: Unsupported file type {:?}. Will create an empty file instead.",
+                record.filename().display(),
+                record.mode().file_type()
+            );
+            File::create(&destination)?;
+            Ok(())
+        }
+        _ => Err(Error::UnsupportedFileType(format!(
+            "{:?}",
+            record.mode().file_type()
+        ))),
+    }?;
+
+    set_file_attributes(&destination, record, attributes)?;
+
+    Ok(())
+}
+
+fn is_unsupported_filetype(filetype: FileType) -> bool {
+    let unsup = filetype.is_block_device()
+        || filetype.is_character_device()
+        || filetype.is_fifo()
+        || filetype.is_socket();
+
+    #[cfg(windows)]
+    let unsup = unsup || filetype.is_symbolic_link();
+
+    unsup
 }
 
 /// Container for all record data
@@ -482,33 +497,14 @@ where
     record.format_acl(resolve_uid, resolve_gid)
 }
 
-fn maybe_read_record_text<R: Read + Seek>(
-    reader: &mut R,
-    record: &Record,
-) -> Result<Option<String>> {
-    if !record
-        .mode()
-        .file_type()
-        .is_some_and(|file_type| file_type.is_regular_file())
-    {
-        return Ok(None);
-    }
-
-    reader.seek(SeekFrom::Start(record.file_position() as u64))?;
-    let mut take = (reader as &mut dyn Read).take(record.compressed_size() as u64);
-    let mut buf = Vec::with_capacity(record.compressed_size() as usize);
-    take.read_to_end(&mut buf)?;
-
-    Ok(String::from_utf8(buf).ok())
-}
-
 fn attach_nfs4_acl_texts<R: Read + Seek>(reader: &mut R, records: &mut [Record]) -> Result<()> {
+    let mut source = ArchiveSource::new(reader);
     let mut pending_nfs4 = Vec::new();
 
     for index in 0..records.len() {
         if records[index]
             .acl()
-            .is_some_and(|acl| acl.acl_mode & AIXC_ACL_MODE_FLAG == 0)
+            .is_some_and(|acl| acl.acl_mode() & AIXC_ACL_MODE_FLAG == 0)
         {
             pending_nfs4.push(index);
         }
@@ -523,7 +519,7 @@ fn attach_nfs4_acl_texts<R: Read + Seek>(reader: &mut R, records: &mut [Record])
             continue;
         }
 
-        let Some(text) = maybe_read_record_text(reader, &records[index])? else {
+        let Some(text) = source.read_text(&records[index])? else {
             continue;
         };
 
@@ -533,7 +529,7 @@ fn attach_nfs4_acl_texts<R: Read + Seek>(reader: &mut R, records: &mut [Record])
 
         if let Some(target_index) = pending_nfs4.pop() {
             if let Some(acl) = records[target_index].data.acl.as_mut() {
-                acl.text = Some(text);
+                acl.attach_nfs4_text(text);
             }
         }
     }
@@ -544,6 +540,7 @@ fn attach_nfs4_acl_texts<R: Read + Seek>(reader: &mut R, records: &mut [Record])
 #[cfg(test)]
 mod tests {
     use crate::bff;
+    use crate::extract::ArchiveSource;
 
     use super::*;
     use filetime::FileTime;
@@ -623,7 +620,8 @@ mod tests {
 
         let records = read_records(&mut file).unwrap();
 
-        let mut reader = make_record_reader(&mut file, &records[1]).unwrap().unwrap();
+        let mut source = ArchiveSource::new(&mut file);
+        let mut reader = source.open(&records[1]).unwrap().unwrap();
 
         let result = extract_file(&mut reader, &dest_path);
 
@@ -638,7 +636,8 @@ mod tests {
 
         let records = read_records(&mut file).unwrap();
 
-        let result = make_record_reader(&mut file, &records[0]);
+        let mut source = ArchiveSource::new(&mut file);
+        let result = source.open(&records[0]);
 
         assert!(result.is_err());
     }
@@ -770,28 +769,31 @@ mod tests {
         let archive = Archive::new(file).unwrap();
         let acl = archive.records()[0].acl().unwrap();
 
-        assert_eq!(acl.num_entries, 5);
-        assert_eq!(acl.version, 2);
-        assert_eq!(acl.acl_len, 32);
-        assert_eq!(acl.acl_mode, crate::bff::S_IXACL);
+        assert_eq!(acl.num_entries(), 5);
+        assert_eq!(acl.version(), 2);
+        assert_eq!(acl.acl_len(), 32);
+        assert_eq!(acl.acl_mode(), crate::bff::S_IXACL);
     }
 
     #[test]
     fn test_acl_base_permissions() {
         let file = open_bff_file("test_acl.bff").unwrap();
         let archive = Archive::new(file).unwrap();
-        let acl = archive.records()[0].acl().unwrap();
+        let acl = archive.records()[0].acl().unwrap().as_aixc().unwrap();
 
-        assert_eq!(acl.owner_perm, 7, "owner should have rwx");
-        assert_eq!(acl.group_perm, 7, "group should have rwx");
-        assert_eq!(acl.everyone_perm, 0, "everyone should have no permissions");
+        assert_eq!(acl.base.owner_perm, 7, "owner should have rwx");
+        assert_eq!(acl.base.group_perm, 7, "group should have rwx");
+        assert_eq!(
+            acl.base.everyone_perm, 0,
+            "everyone should have no permissions"
+        );
     }
 
     #[test]
     fn test_acl_extended_entry_count() {
         let file = open_bff_file("test_acl.bff").unwrap();
         let archive = Archive::new(file).unwrap();
-        let acl = archive.records()[0].acl().unwrap();
+        let acl = archive.records()[0].acl().unwrap().as_aixc().unwrap();
 
         // num_entries=5: 3 base identities + 2 extended = 2 AclEntry values
         assert_eq!(acl.entries.len(), 2);
@@ -801,7 +803,7 @@ mod tests {
     fn test_acl_user_entry() {
         let file = open_bff_file("test_acl.bff").unwrap();
         let archive = Archive::new(file).unwrap();
-        let acl = archive.records()[0].acl().unwrap();
+        let acl = archive.records()[0].acl().unwrap().as_aixc().unwrap();
 
         let user_entry = &acl.entries[0];
         assert_eq!(user_entry.principal_type, AclPrincipalType::User);
@@ -814,7 +816,7 @@ mod tests {
     fn test_acl_group_entry() {
         let file = open_bff_file("test_acl.bff").unwrap();
         let archive = Archive::new(file).unwrap();
-        let acl = archive.records()[0].acl().unwrap();
+        let acl = archive.records()[0].acl().unwrap().as_aixc().unwrap();
 
         let group_entry = &acl.entries[1];
         assert_eq!(group_entry.principal_type, AclPrincipalType::Group);
@@ -886,8 +888,8 @@ mod tests {
         let acl = archive.records()[3].acl().unwrap();
 
         assert!(acl
-            .text
-            .as_deref()
+            .as_nfs4()
+            .and_then(|nfs4| nfs4.text.as_deref())
             .is_some_and(|text| text.starts_with("*\n* ACL_type   NFS4")));
     }
 

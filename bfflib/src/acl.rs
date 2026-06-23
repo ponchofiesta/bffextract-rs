@@ -66,7 +66,7 @@ impl Nfs4AclEntry {
 }
 
 #[derive(Clone, Debug)]
-pub struct AclData {
+pub struct AclMetadata {
     /// Number of ACL entries, including the 3 base identities (owner, group, everyone).
     pub num_entries: u32,
     /// Access control list version.
@@ -75,18 +75,39 @@ pub struct AclData {
     pub acl_len: u32,
     /// ACL mode flags (contains [`S_IXACL`] when an ACL is present).
     pub acl_mode: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct AixcPermissions {
     /// Owner permissions as rwx bits (0-7).
     pub owner_perm: u16,
     /// Group permissions as rwx bits (0-7).
     pub group_perm: u16,
     /// Everyone permissions as rwx bits (0-7).
     pub everyone_perm: u16,
+}
+
+#[derive(Clone, Debug)]
+pub struct AixcAcl {
+    pub metadata: AclMetadata,
+    pub base: AixcPermissions,
     /// Named user / group ACL entries (extended entries beyond the three base identities).
     pub entries: Vec<AclEntry>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Nfs4Acl {
+    pub metadata: AclMetadata,
     /// Parsed NFS4 ACL entries.
-    pub nfs4_entries: Vec<Nfs4AclEntry>,
+    pub entries: Vec<Nfs4AclEntry>,
     /// Optional ACL text preserved from synthetic ACL records.
     pub text: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub enum AclData {
+    Aixc(AixcAcl),
+    Nfs4(Nfs4Acl),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,21 +117,63 @@ pub enum AclKind {
 }
 
 impl AclData {
+    pub fn metadata(&self) -> &AclMetadata {
+        match self {
+            AclData::Aixc(acl) => &acl.metadata,
+            AclData::Nfs4(acl) => &acl.metadata,
+        }
+    }
+
     pub fn kind(&self) -> AclKind {
-        if !self.nfs4_entries.is_empty() || self.text.is_some() {
-            AclKind::Nfs4
-        } else if self.owner_perm != 0
-            || self.group_perm != 0
-            || self.everyone_perm != 0
-            || !self.entries.is_empty()
-        {
-            AclKind::Aixc
-        } else if self.acl_mode & AIXC_ACL_MODE_FLAG != 0 {
-            AclKind::Aixc
-        } else if self.acl_mode & S_IXACL != 0 {
-            AclKind::Nfs4
-        } else {
-            AclKind::Aixc
+        match self {
+            AclData::Aixc(_) => AclKind::Aixc,
+            AclData::Nfs4(_) => AclKind::Nfs4,
+        }
+    }
+
+    pub fn num_entries(&self) -> u32 {
+        self.metadata().num_entries
+    }
+
+    pub fn version(&self) -> u32 {
+        self.metadata().version
+    }
+
+    pub fn acl_len(&self) -> u32 {
+        self.metadata().acl_len
+    }
+
+    pub fn acl_mode(&self) -> u32 {
+        self.metadata().acl_mode
+    }
+
+    pub fn as_aixc(&self) -> Option<&AixcAcl> {
+        match self {
+            AclData::Aixc(acl) => Some(acl),
+            AclData::Nfs4(_) => None,
+        }
+    }
+
+    pub fn as_nfs4(&self) -> Option<&Nfs4Acl> {
+        match self {
+            AclData::Aixc(_) => None,
+            AclData::Nfs4(acl) => Some(acl),
+        }
+    }
+
+    pub(crate) fn attach_nfs4_text(&mut self, text: String) {
+        match self {
+            AclData::Nfs4(acl) => {
+                acl.text = Some(text);
+            }
+            AclData::Aixc(acl) => {
+                let metadata = acl.metadata.clone();
+                *self = AclData::Nfs4(Nfs4Acl {
+                    metadata,
+                    entries: vec![],
+                    text: Some(text),
+                });
+            }
         }
     }
 }
@@ -124,37 +187,50 @@ pub(crate) fn build_acl_data(
         return None;
     }
 
-    let (owner_perm, group_perm, everyone_perm, entries, nfs4_entries) = if let Some(buf) = acl_payload
-    {
-        if is_nfs4_acl_payload(&buf, trailer.num_entries) {
-            (
-                0,
-                0,
-                0,
-                vec![],
-                parse_nfs4_acl_payload(&buf, trailer.num_entries),
-            )
-        } else {
-            let (owner_perm, group_perm, everyone_perm, entries) =
-                parse_acl_payload(&buf, trailer.num_entries);
-            (owner_perm, group_perm, everyone_perm, entries, vec![])
-        }
-    } else {
-        (0, 0, 0, vec![], vec![])
-    };
-
-    Some(AclData {
+    let metadata = AclMetadata {
         num_entries: trailer.num_entries,
         version: trailer.version,
         acl_len: trailer.acl_len,
         acl_mode: trailer.acl_mode,
-        owner_perm,
-        group_perm,
-        everyone_perm,
-        entries,
-        nfs4_entries,
-        text: None,
-    })
+    };
+
+    if let Some(buf) = acl_payload {
+        if is_nfs4_acl_payload(&buf, trailer.num_entries) {
+            Some(AclData::Nfs4(Nfs4Acl {
+                metadata,
+                entries: parse_nfs4_acl_payload(&buf, trailer.num_entries),
+                text: None,
+            }))
+        } else {
+            let (owner_perm, group_perm, everyone_perm, entries) =
+                parse_acl_payload(&buf, trailer.num_entries);
+            Some(AclData::Aixc(AixcAcl {
+                metadata,
+                base: AixcPermissions {
+                    owner_perm,
+                    group_perm,
+                    everyone_perm,
+                },
+                entries,
+            }))
+        }
+    } else if trailer.acl_mode & AIXC_ACL_MODE_FLAG != 0 {
+        Some(AclData::Aixc(AixcAcl {
+            metadata,
+            base: AixcPermissions {
+                owner_perm: 0,
+                group_perm: 0,
+                everyone_perm: 0,
+            },
+            entries: vec![],
+        }))
+    } else {
+        Some(AclData::Nfs4(Nfs4Acl {
+            metadata,
+            entries: vec![],
+            text: None,
+        }))
+    }
 }
 
 /// Parse the raw ACL payload bytes into base permissions and named ACL entries.
@@ -343,15 +419,25 @@ where
     F: Fn(u32) -> String,
     G: Fn(u32) -> String,
 {
+    let acl = acl.as_aixc().expect("AIXC formatter requires an AIXC ACL");
+
     let mut lines = vec![
         format!("{}:", filename.display()),
         "*".to_string(),
         "* ACL_type   AIXC".to_string(),
         "*".to_string(),
         "base permissions".to_string(),
-        format!("        owner({}): {}", resolve_uid(uid), rwx_to_string(acl.owner_perm)),
-        format!("        group({}): {}", resolve_gid(gid), rwx_to_string(acl.group_perm)),
-        format!("        others: {}", rwx_to_string(acl.everyone_perm)),
+        format!(
+            "        owner({}): {}",
+            resolve_uid(uid),
+            rwx_to_string(acl.base.owner_perm)
+        ),
+        format!(
+            "        group({}): {}",
+            resolve_gid(gid),
+            rwx_to_string(acl.base.group_perm)
+        ),
+        format!("        others: {}", rwx_to_string(acl.base.everyone_perm)),
     ];
 
     if !acl.entries.is_empty() {
@@ -384,6 +470,8 @@ where
     F: Fn(u32) -> String,
     G: Fn(u32) -> String,
 {
+    let acl = acl.as_nfs4().expect("NFS4 formatter requires an NFS4 ACL");
+
     if let Some(text) = &acl.text {
         return format!("{}:\n{}", filename.display(), text.trim_end());
     }
@@ -399,7 +487,7 @@ where
         "*".to_string(),
     ];
 
-    for entry in &acl.nfs4_entries {
+    for entry in &acl.entries {
         let action = if entry.is_allow() { "a" } else { "d" };
         let perms = nfs4_access_to_string(entry.access_mask);
         let flags = nfs4_flags_to_string(entry.inheritance_flags());
@@ -424,9 +512,7 @@ mod tests {
 
     #[test]
     fn test_parse_acl_payload_no_extended_entries() {
-        let payload: Vec<u8> = vec![
-            0x00, 0x00, 0x05, 0x00, 0x04, 0x00, 0x00, 0x00,
-        ];
+        let payload: Vec<u8> = vec![0x00, 0x00, 0x05, 0x00, 0x04, 0x00, 0x00, 0x00];
         let (owner, group, everyone, entries) = parse_acl_payload(&payload, 3);
         assert_eq!(owner, 5);
         assert_eq!(group, 4);
@@ -436,9 +522,7 @@ mod tests {
 
     #[test]
     fn test_parse_acl_payload_deny_ace() {
-        let mut payload: Vec<u8> = vec![
-            0x00, 0x00, 0x07, 0x00, 0x07, 0x00, 0x00, 0x00,
-        ];
+        let mut payload: Vec<u8> = vec![0x00, 0x00, 0x07, 0x00, 0x07, 0x00, 0x00, 0x00];
         payload.extend_from_slice(&[
             0x0c, 0x00, 0x07, 0x00, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x64,
         ]);
@@ -452,9 +536,9 @@ mod tests {
     #[test]
     fn test_parse_nfs4_acl_payload_special_and_group_entries() {
         let payload: Vec<u8> = vec![
-            0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x27, 0x00, 0x00, 0x00,
-            0xff, 0xff, 0xff, 0xff, 0x01, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
-            0x01, 0x00, 0x00, 0x00, 0xd2, 0x04, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x27, 0x00, 0x00, 0x00, 0xff, 0xff,
+            0xff, 0xff, 0x01, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0xd2, 0x04, 0x00, 0x00,
         ];
 
         let entries = parse_nfs4_acl_payload(&payload, 2);

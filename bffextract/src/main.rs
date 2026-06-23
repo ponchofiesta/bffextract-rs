@@ -229,7 +229,6 @@ fn print_content<R: Read + Seek, P: AsRef<Path>>(
                     .iter()
                     .any(|inc_path| record.filename().starts_with(inc_path))
         })
-        .map(|&record| record)
         .collect();
     for record in records {
         let username = if numeric {
