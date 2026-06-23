@@ -201,7 +201,11 @@ fn print_content<R: Read + Seek, P: AsRef<Path>>(
         };
 
         table.add_row(vec![
-            format!("{}", record.mode()),
+            format!(
+                "{}{}",
+                record.mode(),
+                if record.acl().is_some() { "+" } else { " " }
+            ),
             username,
             groupname,
             format!("{}", record.size()),
