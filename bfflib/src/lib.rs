@@ -7,38 +7,40 @@
 //! <br>
 //!
 //! # Examples
-//! 
+//!
 //! Open an archive file:
-//! 
+//!
 //! ```rust
 //! use std::{fs::File, io::BufReader};
 //! use bfflib::{attribute, archive::Archive, Result};
-//! 
+//!
 //! fn example() -> Result<()> {
 //!     // Open BFF file
 //!     let file = File::open("file.bff")?;
 //!     // Use BufReader for better performance
 //!     let reader = BufReader::new(file);
 //!     let mut archive = Archive::new(reader)?;
-//! 
+//!
 //!     // Print filenames of all records in the archive
 //!     archive.records().iter()
 //!         .for_each(|record| println!("{}", record.filename().display()));
-//! 
+//!
 //!     // Extract the whole archive
 //!     archive.extract("output_dir")?;
-//! 
+//!
 //!     // Extract single file
 //!     archive.extract_file_by_name("./path/file", "output_dir")?;
-//! 
+//!
 //!     Ok(())
 //! }
 //! ```
 
-pub mod attribute;
+pub mod acl;
 pub mod archive;
+pub mod attribute;
 pub mod bff;
 pub mod error;
+mod extract;
 pub mod huffman;
 pub mod util;
 
