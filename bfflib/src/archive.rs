@@ -25,7 +25,7 @@ use crate::{
 use crate::{Error, Result};
 
 pub use crate::acl::{
-    AclData, AclEntry, AclKind, AclMetadata, AclPrincipalType, AixcAcl, AixcPermissions, Nfs4Acl,
+    AclData, AclEntry, AclMetadata, AclPrincipalType, AixcAcl, AixcPermissions, Nfs4Acl,
     Nfs4AclEntry, Nfs4AclPrincipal,
 };
 pub use crate::extract::RecordReader;
@@ -877,8 +877,8 @@ mod tests {
         let archive = Archive::new(file).unwrap();
         let records = archive.records();
 
-        assert_eq!(records[1].acl().unwrap().kind(), AclKind::Aixc);
-        assert_eq!(records[3].acl().unwrap().kind(), AclKind::Nfs4);
+        assert_eq!(records[1].acl().unwrap().as_aixc().is_some(), true);
+        assert_eq!(records[3].acl().unwrap().as_nfs4().is_some(), true);
     }
 
     #[test]
@@ -899,7 +899,7 @@ mod tests {
         let archive = Archive::new(file).unwrap();
         let acl = archive.records()[0].acl().unwrap();
 
-        assert_eq!(acl.kind(), AclKind::Aixc);
+        assert_eq!(acl.as_aixc().is_some(), true);
     }
 
     #[test]

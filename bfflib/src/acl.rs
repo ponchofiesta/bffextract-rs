@@ -110,24 +110,11 @@ pub enum AclData {
     Nfs4(Nfs4Acl),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AclKind {
-    Aixc,
-    Nfs4,
-}
-
 impl AclData {
     pub fn metadata(&self) -> &AclMetadata {
         match self {
             AclData::Aixc(acl) => &acl.metadata,
             AclData::Nfs4(acl) => &acl.metadata,
-        }
-    }
-
-    pub fn kind(&self) -> AclKind {
-        match self {
-            AclData::Aixc(_) => AclKind::Aixc,
-            AclData::Nfs4(_) => AclKind::Nfs4,
         }
     }
 
@@ -349,9 +336,9 @@ where
     F: Fn(u32) -> String,
     G: Fn(u32) -> String,
 {
-    match acl.kind() {
-        AclKind::Nfs4 => format_acl_nfs4(filename, uid, gid, acl, &resolve_uid, &resolve_gid),
-        AclKind::Aixc => format_acl_aixc(filename, uid, gid, acl, &resolve_uid, &resolve_gid),
+    match acl {
+        AclData::Nfs4(acl) => format_acl_nfs4(filename, uid, gid, acl, &resolve_uid, &resolve_gid),
+        AclData::Aixc(acl) => format_acl_aixc(filename, uid, gid, acl, &resolve_uid, &resolve_gid),
     }
 }
 
@@ -411,7 +398,7 @@ fn format_acl_aixc<F, G>(
     filename: &Path,
     uid: u32,
     gid: u32,
-    acl: &AclData,
+    acl: &AixcAcl,
     resolve_uid: &F,
     resolve_gid: &G,
 ) -> String
@@ -419,8 +406,6 @@ where
     F: Fn(u32) -> String,
     G: Fn(u32) -> String,
 {
-    let acl = acl.as_aixc().expect("AIXC formatter requires an AIXC ACL");
-
     let mut lines = vec![
         format!("{}:", filename.display()),
         "*".to_string(),
@@ -462,7 +447,7 @@ fn format_acl_nfs4<F, G>(
     filename: &Path,
     uid: u32,
     gid: u32,
-    acl: &AclData,
+    acl: &Nfs4Acl,
     resolve_uid: &F,
     resolve_gid: &G,
 ) -> String
@@ -470,8 +455,6 @@ where
     F: Fn(u32) -> String,
     G: Fn(u32) -> String,
 {
-    let acl = acl.as_nfs4().expect("NFS4 formatter requires an NFS4 ACL");
-
     if let Some(text) = &acl.text {
         return format!("{}:\n{}", filename.display(), text.trim_end());
     }
