@@ -49,8 +49,8 @@ fn align_reader_to_eight<R: Seek>(reader: &mut R) -> Result<()> {
     Ok(())
 }
 
-/// Read next [Record] from the reader
-fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Option<Record>> {
+/// Read the next [Record] from the reader.
+fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Record> {
     let record_header: RecordHeader = util::read_struct(reader)?;
     if record_header.format_marker() != 0x0b {
         return Err(Error::InvalidRecord);
@@ -120,7 +120,7 @@ fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Option<Record>> {
         symlink.map(PathBuf::from),
         position as u32,
     );
-    Ok(Some(record))
+    Ok(record)
 }
 
 /// Read all [Record]s from the reader
@@ -128,10 +128,7 @@ fn read_records<R: Read + Seek>(reader: &mut R) -> Result<Vec<Record>> {
     let mut records = vec![];
     loop {
         match read_next_record(reader) {
-            Ok(record) => match record {
-                Some(record) => records.push(record),
-                None => break,
-            },
+            Ok(record) => records.push(record),
             Err(e) => match e {
                 Error::InvalidRecord => (),
                 // Hopefully not unexpected EOF
@@ -577,8 +574,6 @@ mod tests {
 
         assert!(result.is_ok());
         let record = result.unwrap();
-        assert!(record.is_some());
-        let record = record.unwrap();
         let magic = record.header().magic;
         assert!(HEADER_MAGICS.contains(&magic));
     }
