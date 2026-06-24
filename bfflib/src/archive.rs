@@ -3,7 +3,7 @@
 use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -196,6 +196,28 @@ fn record_index_by_filename<P: AsRef<Path>>(records: &[Record], filename: P) -> 
         .position(|record| record.filename() == filename.as_ref())
 }
 
+fn validated_extraction_path<P: AsRef<Path>, Q: AsRef<Path>>(
+    destination_root: P,
+    record_path: Q,
+) -> Result<PathBuf> {
+    let destination_root = destination_root.as_ref();
+    let mut validated = PathBuf::from(destination_root);
+
+    for component in record_path.as_ref().components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(segment) => validated.push(segment),
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
+                return Err(Error::InvalidExtractionPath(
+                    record_path.as_ref().to_path_buf(),
+                ));
+            }
+        }
+    }
+
+    Ok(validated)
+}
+
 /// A BFF archive
 pub struct Archive<R> {
     source: ArchiveSource<R>,
@@ -352,7 +374,8 @@ impl<R: Read + Seek> Archive<R> {
         let source = &mut self.source;
         for record in self.records.iter() {
             if when(record) {
-                let target_path = destination.as_ref().join(record.filename()).normalize();
+                let target_path =
+                    validated_extraction_path(destination.as_ref(), record.filename())?.normalize();
                 extract_record_with_attr(source, record, &target_path, attributes)?;
             }
         }
@@ -378,7 +401,18 @@ impl<R: Read + Seek> Archive<R> {
                 continue;
             }
 
-            let target_path = destination.as_ref().join(record.filename()).normalize();
+            let target_path =
+                match validated_extraction_path(destination.as_ref(), record.filename()) {
+                    Ok(path) => path.normalize(),
+                    Err(error) => {
+                        report.skipped_entries.push(SkippedEntry {
+                            record: record.filename().to_path_buf(),
+                            destination: destination.as_ref().to_path_buf(),
+                            error: error.to_string(),
+                        });
+                        continue;
+                    }
+                };
             match extract_record_best_effort_with_attr(source, record, &target_path, attributes) {
                 ExtractionDisposition::Extracted => {
                     report.extracted_entries.push(ExtractedEntry {
@@ -871,6 +905,70 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(dest_path.exists());
+    }
+
+    #[test]
+    fn test_validated_extraction_path_rejects_parent_dir_escape() {
+        let temp_dir = tempdir().unwrap();
+        let result = validated_extraction_path(temp_dir.path(), Path::new("../escape.txt"));
+
+        assert!(
+            matches!(result, Err(Error::InvalidExtractionPath(path)) if path == PathBuf::from("../escape.txt"))
+        );
+    }
+
+    #[test]
+    fn test_validated_extraction_path_rejects_rooted_path() {
+        let temp_dir = tempdir().unwrap();
+        let rooted = Path::new("/absolute.txt");
+
+        let result = validated_extraction_path(temp_dir.path(), rooted);
+
+        assert!(matches!(result, Err(Error::InvalidExtractionPath(path)) if path == rooted));
+    }
+
+    #[test]
+    fn test_extract_when_with_attr_rejects_escaping_record_path_before_write() {
+        let file = open_bff_file("test.bff").unwrap();
+        let temp_dir = tempdir().unwrap();
+        let outside_path = temp_dir.path().join("escape.txt");
+
+        let mut archive = Archive::new(file).unwrap();
+        archive.records[1].filename = PathBuf::from("../escape.txt");
+
+        let result = archive.extract_when_with_attr(
+            temp_dir.path().join("safe"),
+            attribute::ATTRIBUTE_NONE,
+            |_| true,
+        );
+
+        assert!(
+            matches!(result, Err(Error::InvalidExtractionPath(path)) if path == PathBuf::from("../escape.txt"))
+        );
+        assert!(!outside_path.exists());
+    }
+
+    #[test]
+    fn test_best_effort_extract_reports_escaping_record_path() {
+        let file = open_bff_file("test.bff").unwrap();
+        let temp_dir = tempdir().unwrap();
+
+        let mut archive = Archive::new(file).unwrap();
+        archive.records[1].filename = PathBuf::from("../escape.txt");
+
+        let report = archive
+            .extract_when_best_effort_with_attr(
+                temp_dir.path().join("safe"),
+                attribute::ATTRIBUTE_NONE,
+                |_| true,
+            )
+            .unwrap();
+
+        assert!(report
+            .skipped_entries
+            .iter()
+            .any(|entry| entry.record == PathBuf::from("../escape.txt")
+                && entry.error.contains("escapes extraction root")));
     }
 
     // -----------------------------------------------------------------------

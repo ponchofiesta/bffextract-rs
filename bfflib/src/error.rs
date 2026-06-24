@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::path::PathBuf;
 
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -24,6 +25,8 @@ pub enum Error {
     FileToBig,
     /// A filename was not found in archive
     FileNotFound,
+    /// A record path would escape the requested extraction root.
+    InvalidExtractionPath(PathBuf),
     /// A record contains unsupported file type
     UnsupportedFileType(String),
 
@@ -68,6 +71,11 @@ impl Display for Error {
                 write!(f, "Invalid file format: Invalid tree levels.")
             }
             FileNotFound => write!(f, "Filename wasn't found in archive."),
+            InvalidExtractionPath(path) => write!(
+                f,
+                "Record path escapes extraction root and was rejected: {}",
+                path.display()
+            ),
             UnsupportedFileType(s) => write!(f, "The file type of the record is unsupported: {s}."),
 
             // Extraction errors
