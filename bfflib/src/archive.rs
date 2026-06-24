@@ -416,23 +416,11 @@ pub struct Record {
     /// Filename
     pub filename: PathBuf,
     pub symlink: Option<PathBuf>,
-    /// Compressed file size
-    pub compressed_size: u32,
-    /// Decompressed file size.
-    pub size: u32,
     /// File system mode (rwx...)
     pub mode: Mode,
-    /// Owner user ID number of the file
-    pub uid: u32,
-    /// Owner group ID number of the file
-    pub gid: u32,
     /// Last modified date of the file
     pub mdate: NaiveDateTime,
     pub adate: NaiveDateTime,
-    /// Position of the file data in the BFF file
-    pub file_position: u32,
-    /// Magic number of the record
-    pub magic: u16,
     /// Access control list
     pub acl: Option<AclData>,
     raw: RecordRaw,
@@ -442,6 +430,7 @@ pub struct Record {
 struct RecordRaw {
     header: RecordHeader,
     record_acl: RecordAcl,
+    file_position: u32,
 }
 
 impl Record {
@@ -457,21 +446,19 @@ impl Record {
         Self {
             filename,
             symlink,
-            compressed_size: header.compressed_size,
-            size: header.size,
             mode: Mode::from(header.mode),
-            uid: header.uid,
-            gid: header.gid,
             mdate: DateTime::from_timestamp(header.mtime as i64, 0)
                 .map(|dt| dt.naive_local())
                 .unwrap_or_else(|| Utc::now().naive_local()),
             adate: DateTime::from_timestamp(header.atime as i64, 0)
                 .map(|dt| dt.naive_local())
                 .unwrap_or_else(|| Utc::now().naive_local()),
-            file_position,
-            magic: header.magic,
             acl,
-            raw: RecordRaw { header, record_acl },
+            raw: RecordRaw {
+                header,
+                record_acl,
+                file_position,
+            },
         }
     }
 
@@ -482,19 +469,19 @@ impl Record {
         self.symlink.as_ref().map(|pb| pb.as_ref())
     }
     pub fn compressed_size(&self) -> u32 {
-        self.compressed_size
+        self.raw.header.compressed_size
     }
     pub fn size(&self) -> u32 {
-        self.size
+        self.raw.header.size
     }
     pub fn mode(&self) -> &Mode {
         &self.mode
     }
     pub fn uid(&self) -> u32 {
-        self.uid
+        self.raw.header.uid
     }
     pub fn gid(&self) -> u32 {
-        self.gid
+        self.raw.header.gid
     }
     pub fn mdate(&self) -> &NaiveDateTime {
         &self.mdate
@@ -503,10 +490,10 @@ impl Record {
         &self.adate
     }
     pub fn file_position(&self) -> u32 {
-        self.file_position
+        self.raw.file_position
     }
     pub fn magic(&self) -> u16 {
-        self.magic
+        self.raw.header.magic
     }
     pub fn acl(&self) -> Option<&AclData> {
         self.acl.as_ref()
