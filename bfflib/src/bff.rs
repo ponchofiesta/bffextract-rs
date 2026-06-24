@@ -1,4 +1,4 @@
-use crate::{util::PackedStruct, Result};
+use crate::Result;
 use std::io::Read;
 
 /// All BFF files should contain this magic number.
@@ -45,8 +45,6 @@ pub struct FileHeader {
     /// Constant `100` in sampled archives. Likely a format or writer version field.
     pub unk44: u32,
 }
-
-unsafe impl PackedStruct for FileHeader {}
 
 impl FileHeader {
     /// Returns the 16-bit archive header checksum validated by AIX `restbyname`.
@@ -147,8 +145,6 @@ pub struct RecordHeader {
     /// Reserved, observed as 0.
     pub unk3_c: u32,
 }
-
-unsafe impl PackedStruct for RecordHeader {}
 
 impl RecordHeader {
     /// Returns the entry subtype byte emitted by the AIX backup writer.

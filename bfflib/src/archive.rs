@@ -23,7 +23,6 @@ use crate::{
         extract_record_best_effort_with_attr, extract_record_with_attr, ArchiveSource,
         ExtractionDisposition,
     },
-    util::{self},
 };
 use crate::{Error, Result};
 
@@ -77,7 +76,10 @@ fn align_reader_to_eight<R: Seek>(reader: &mut R) -> Result<()> {
 
 /// Read the next [Record] from the reader.
 fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Record> {
-    let record_header: RecordHeader = util::read_struct(reader)?;
+    let mut header_bytes = [0u8; std::mem::size_of::<RecordHeader>()];
+    reader.read_exact(&mut header_bytes)?;
+    let record_header: RecordHeader =
+        unsafe { std::ptr::read_unaligned(header_bytes.as_ptr().cast()) };
     if record_header.format_marker() != 0x0b {
         return Err(Error::InvalidRecord);
     }
@@ -93,7 +95,10 @@ fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Record> {
         symlink = Some(read_aligned_string(reader)?);
     }
 
-    let record_trailer: RecordAcl = util::read_struct(reader)?;
+    let mut trailer_bytes = [0u8; std::mem::size_of::<RecordAcl>()];
+    reader.read_exact(&mut trailer_bytes)?;
+    let record_trailer: RecordAcl =
+        unsafe { std::ptr::read_unaligned(trailer_bytes.as_ptr().cast()) };
 
     // The ACL payload is partially embedded inside the trailer struct itself:
     // `acl_payload_bytes` holds the first TRAILER_INLINE_ACL_BYTES (24) bytes.
