@@ -195,22 +195,19 @@ pub struct Archive<R> {
 }
 
 impl<R: Read + Seek> Archive<R> {
-    /// Creates a new Archive instance using best-effort record scanning.
-    ///
-    /// This preserves the historical library behavior of skipping malformed
-    /// records where the stream can continue.
+    /// Creates a new Archive instance using strict record parsing.
     pub fn new(reader: R) -> Result<Self> {
-        Self::from_reader_with_mode(reader, RecordScanMode::BestEffort)
+        Self::from_reader_with_mode(reader, RecordScanMode::Strict)
     }
 
-    /// Creates a new Archive instance using strict record parsing.
+    /// Creates a new Archive instance using explicit strict record parsing.
     pub fn new_strict(reader: R) -> Result<Self> {
-        Self::from_reader_with_mode(reader, RecordScanMode::Strict)
+        Self::new(reader)
     }
 
     /// Creates a new Archive instance using explicit best-effort scanning.
     pub fn scan(reader: R) -> Result<Self> {
-        Self::new(reader)
+        Self::from_reader_with_mode(reader, RecordScanMode::BestEffort)
     }
 
     fn from_reader_with_mode(mut reader: R, mode: RecordScanMode) -> Result<Self> {
@@ -772,11 +769,20 @@ mod tests {
     fn test_archive_creation() {
         let file = open_bff_file("test.bff").unwrap();
 
-        let archive = Archive::new(file);
+        let archive = Archive::scan(file);
 
         assert!(archive.is_ok());
         let archive = archive.unwrap();
         assert!(!archive.records().is_empty());
+    }
+
+    #[test]
+    fn test_new_is_strict_while_scan_is_best_effort() {
+        let strict = Archive::new(open_bff_file("test.bff").unwrap());
+        let best_effort = Archive::scan(open_bff_file("test.bff").unwrap());
+
+        assert!(strict.is_err());
+        assert!(best_effort.is_ok());
     }
 
     #[test]
@@ -786,7 +792,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let dest_path = temp_dir.path().join("extracted_file.txt");
 
-        let mut archive = Archive::new(file).unwrap();
+        let mut archive = Archive::scan(file).unwrap();
         let result = archive.extract_file_by_name_with_attr(
             "backup/file.txt",
             &dest_path,
@@ -851,7 +857,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let outside_path = temp_dir.path().join("escape.txt");
 
-        let mut archive = Archive::new(file).unwrap();
+        let mut archive = Archive::scan(file).unwrap();
         archive.records[1].filename = PathBuf::from("../escape.txt");
 
         let result = archive.extract_when_with_attr(
@@ -871,7 +877,7 @@ mod tests {
         let file = open_bff_file("test.bff").unwrap();
         let temp_dir = tempdir().unwrap();
 
-        let mut archive = Archive::new(file).unwrap();
+        let mut archive = Archive::scan(file).unwrap();
         archive.records[1].filename = PathBuf::from("../escape.txt");
 
         let report = archive
@@ -995,7 +1001,7 @@ mod tests {
     #[test]
     fn test_acl_aixc_nfs4_reads_all_records() {
         let file = open_bff_file("acl_aixc_nfs4.bff").unwrap();
-        let archive = Archive::new(file).unwrap();
+        let archive = Archive::scan(file).unwrap();
         let records = archive.records();
 
         let names: Vec<_> = records
@@ -1020,7 +1026,7 @@ mod tests {
     #[test]
     fn test_acl_aixc_nfs4_detects_acl_kinds() {
         let file = open_bff_file("acl_aixc_nfs4.bff").unwrap();
-        let archive = Archive::new(file).unwrap();
+        let archive = Archive::scan(file).unwrap();
         let records = archive.records();
 
         assert_eq!(records[1].acl().unwrap().as_aixc().is_some(), true);
@@ -1030,7 +1036,7 @@ mod tests {
     #[test]
     fn test_acl_aixc_nfs4_preserves_nfs4_text_payload() {
         let file = open_bff_file("acl_aixc_nfs4.bff").unwrap();
-        let archive = Archive::new(file).unwrap();
+        let archive = Archive::scan(file).unwrap();
         let acl = archive.records()[3].acl().unwrap();
 
         assert!(acl
@@ -1051,7 +1057,7 @@ mod tests {
     #[test]
     fn test_format_acl_aix_text_formats_aixc() {
         let file = open_bff_file("acl_aixc_nfs4.bff").unwrap();
-        let archive = Archive::new(file).unwrap();
+        let archive = Archive::scan(file).unwrap();
         let records = archive.records();
         let record = records
             .iter()
@@ -1069,7 +1075,7 @@ mod tests {
     #[test]
     fn test_format_acl_aix_text_formats_nfs4() {
         let file = open_bff_file("acl_aixc_nfs4.bff").unwrap();
-        let archive = Archive::new(file).unwrap();
+        let archive = Archive::scan(file).unwrap();
         let records = archive.records();
         let record = records
             .iter()

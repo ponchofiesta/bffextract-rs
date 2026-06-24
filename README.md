@@ -51,6 +51,13 @@ Options:
   sockets and fifo are unsupported. I don't see a need for them.
 - Bad file format may be ignored in some cases.
 
+## Library parsing modes
+
+- `Archive::new(...)` uses strict parsing and returns an error when a malformed
+  record is encountered.
+- `Archive::scan(...)` uses best-effort scanning and skips malformed records
+  when the stream can continue. This is what the CLI uses.
+
 ## Credits
 
 Based on:
