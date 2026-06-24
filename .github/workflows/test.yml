@@ -3,17 +3,16 @@ name: Test
 on: [push, pull_request]
 
 jobs:
-
   test:
     name: Test for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os:
-          - ubuntu-20.04
-          - windows-2019
-          - macos-13
+          - ubuntu-24.04
+          - windows-2025
+          - macos-26
     steps:
-    - uses: actions/checkout@v4
-    - name: Test
-      run: cargo test
+      - uses: actions/checkout@v4
+      - name: Test
+        run: cargo test

@@ -3,15 +3,14 @@ name: Create release
 on:
   push:
     tags:
-    - 'v*.*.*'
+      - "v*.*.*"
 
 permissions:
   contents: write
 
 jobs:
-
   pre:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.get_variables.outputs.version }}
       artifact_name: ${{ steps.get_variables.outputs.artifact_name }}
@@ -30,32 +29,32 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-20.04
+          - os: ubuntu-24.04
             pack: tar czf ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-linux.tar.gz target/x86_64-unknown-linux-musl/release/${{ needs.pre.outputs.artifact_name }} README.md LICENSE-MIT LICENSE-APACHE
             asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-linux.tar.gz
             build: cargo build --release --locked --target x86_64-unknown-linux-musl
-          - os: windows-2019
+          - os: windows-2025
             pack: Compress-Archive -DestinationPath ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip -Path target\release\${{ needs.pre.outputs.artifact_name }}.exe, README.md, LICENSE-MIT, LICENSE-APACHE
             asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-windows.zip
             build: cargo build --release --locked
-          - os: macos-13
+          - os: macos-26
             pack: tar czf ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-macos.tar.gz target/release/${{ needs.pre.outputs.artifact_name }} README.md LICENSE-MIT LICENSE-APACHE
             asset_name: ${{ needs.pre.outputs.artifact_name }}-${{ needs.pre.outputs.version }}-macos.tar.gz
             build: cargo build --release --locked
     steps:
-    - uses: actions/checkout@v4
-    - name: Install MUSL
-      if: matrix.os == 'ubuntu-20.04'
-      run: rustup target add x86_64-unknown-linux-musl
-    - name: Test
-      run: cargo test
-    - name: Build
-      run: ${{ matrix.build }}
-    - name: Pack
-      run: ${{ matrix.pack }}
-    - name: Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: ${{ matrix.asset_name }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+      - name: Install MUSL
+        if: matrix.os == 'ubuntu-24.04'
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: Test
+        run: cargo test
+      - name: Build
+        run: ${{ matrix.build }}
+      - name: Pack
+        run: ${{ matrix.pack }}
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
