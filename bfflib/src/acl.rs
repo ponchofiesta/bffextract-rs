@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::util::PackedStruct;
+
 /// File mode bit for ACLs.
 pub const S_IXACL: u32 = 0x02000000;
 
@@ -26,6 +28,8 @@ pub struct RecordAcl {
     /// First 24 bytes of the ACL payload, stored inline inside the trailer region.
     pub acl_payload_bytes: [u8; TRAILER_INLINE_ACL_BYTES],
 }
+
+unsafe impl PackedStruct for RecordAcl {}
 
 impl Default for RecordAcl {
     fn default() -> Self {

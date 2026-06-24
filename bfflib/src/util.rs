@@ -1,11 +1,19 @@
-use std::{fs, mem};
+use std::io::{Error, Read, Result};
 use std::path::Path;
 use std::slice::from_raw_parts_mut;
-use std::io::{Error, Read, Result};
+use std::{fs, mem};
+
+/// Marker for packed on-disk structs that can be safely initialized from raw bytes.
+///
+/// # Safety
+///
+/// Implementors must be plain-old-data layouts with no invalid bit patterns,
+/// no drop glue, and a stable byte representation that matches the on-disk format.
+pub(crate) unsafe trait PackedStruct: Sized {}
 
 /// Read binary data from a stream `reader` and map the bytes on the resulting
 /// struct. Target struct needs to be packed.
-pub(crate) fn read_struct<R: ?Sized + Read, T: Sized>(reader: &mut R) -> Result<T> {
+pub(crate) fn read_struct<R: ?Sized + Read, T: PackedStruct>(reader: &mut R) -> Result<T> {
     let mut obj: T = unsafe { mem::zeroed() };
     let size = mem::size_of::<T>();
     let buffer_slice = unsafe { from_raw_parts_mut(&mut obj as *mut _ as *mut u8, size) };
@@ -30,17 +38,17 @@ pub(crate) fn create_dir_all<P: AsRef<Path>>(path: P) -> Result<()> {
 /// Create the parent directory of the given path and all of its parent directories if needed.
 /// If the parent directory already exists, it will not be modified.
 pub(crate) fn create_parent_dir_all<D: AsRef<Path>>(destination: &D) -> Result<()> {
-    let parent = destination
-        .as_ref()
-        .parent()
-        .ok_or(Error::other(format!("Missing parent directory for {}", destination.as_ref().display())))?;
+    let parent = destination.as_ref().parent().ok_or(Error::other(format!(
+        "Missing parent directory for {}",
+        destination.as_ref().display()
+    )))?;
     create_dir_all(parent)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
     use fs::File;
+    use std::io::Cursor;
     use tempfile::tempdir;
 
     use super::*;
@@ -52,6 +60,8 @@ mod tests {
         pub b: u16,
         pub c: u32,
     }
+
+    unsafe impl PackedStruct for ReadStruct {}
 
     #[test]
     fn read_struct_has_correct_fields() -> Result<()> {
