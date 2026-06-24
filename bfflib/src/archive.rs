@@ -13,12 +13,12 @@ use normalize_path::NormalizePath;
 use std::os::unix::fs::symlink;
 
 use crate::{
-    acl::{build_acl_data, format_acl_text, AIXC_ACL_MODE_FLAG},
-    attribute,
-    bff::{
-        read_aligned_string, FileHeader, RecordHeader, RecordTrailer, FILE_MAGIC, HEADER_MAGICS,
-        S_IXACL, TRAILER_INLINE_ACL_BYTES,
+    acl::{
+        build_acl_data, format_acl_text, RecordAcl, AIXC_ACL_MODE_FLAG, S_IXACL,
+        TRAILER_INLINE_ACL_BYTES,
     },
+    attribute,
+    bff::{read_aligned_string, FileHeader, RecordHeader, FILE_MAGIC, HEADER_MAGICS},
     extract::{extract_file, set_file_attributes, ArchiveSource},
     util::{self, create_dir_all, create_parent_dir_all},
 };
@@ -67,7 +67,7 @@ fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Option<Record>> {
         symlink = Some(read_aligned_string(reader)?);
     }
 
-    let record_trailer: RecordTrailer = util::read_struct(reader)?;
+    let record_trailer: RecordAcl = util::read_struct(reader)?;
 
     // The ACL payload is partially embedded inside the trailer struct itself:
     // `acl_payload_bytes` holds the first TRAILER_INLINE_ACL_BYTES (24) bytes.
@@ -373,7 +373,7 @@ fn is_unsupported_filetype(filetype: FileType) -> bool {
 pub struct Record {
     data: RecordData,
     header: RecordHeader,
-    trailer: RecordTrailer,
+    trailer: RecordAcl,
 }
 
 impl Record {
@@ -433,7 +433,7 @@ impl Record {
     pub fn header(&self) -> &RecordHeader {
         &self.header
     }
-    pub fn trailer(&self) -> &RecordTrailer {
+    pub fn trailer(&self) -> &RecordAcl {
         &self.trailer
     }
 }
@@ -466,7 +466,7 @@ pub struct RecordData {
 }
 
 impl RecordData {
-    pub fn new(header: RecordHeader, trailer: RecordTrailer, acl_payload: Option<Vec<u8>>) -> Self {
+    pub fn new(header: RecordHeader, trailer: RecordAcl, acl_payload: Option<Vec<u8>>) -> Self {
         let acl = build_acl_data(header.mode, &trailer, acl_payload);
         Self {
             filename: PathBuf::new(),
@@ -772,7 +772,7 @@ mod tests {
         assert_eq!(acl.num_entries(), 5);
         assert_eq!(acl.version(), 2);
         assert_eq!(acl.acl_len(), 32);
-        assert_eq!(acl.acl_mode(), crate::bff::S_IXACL);
+        assert_eq!(acl.acl_mode(), crate::acl::S_IXACL);
     }
 
     #[test]

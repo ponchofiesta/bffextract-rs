@@ -1,8 +1,43 @@
 use std::path::Path;
 
-use crate::bff::{RecordTrailer, S_IXACL};
+/// File mode bit for ACLs.
+pub const S_IXACL: u32 = 0x02000000;
 
 pub(crate) const AIXC_ACL_MODE_FLAG: u32 = 0x0000_0800;
+
+/// The byte capacity for ACL payload bytes that are embedded directly inside
+/// the [`RecordAcl`] struct (fields `acl_payload_bytes`).
+pub const TRAILER_INLINE_ACL_BYTES: usize = 24;
+
+/// Representation of the data after each record header and record file name.
+///
+/// Layout (all fields little-endian, struct is 40 bytes on disk):
+/// - `num_entries` / `version` / `acl_len` / `acl_mode`: the ACL descriptor (16 bytes).
+/// - `acl_payload_bytes`: the first [`TRAILER_INLINE_ACL_BYTES`] bytes of the ACL payload
+///   are stored inline here. When `acl_len > TRAILER_INLINE_ACL_BYTES`, the remaining
+///   bytes follow the trailer in the file stream.
+#[repr(C, packed)]
+#[derive(Debug, Copy, Clone)]
+pub struct RecordAcl {
+    pub num_entries: u32,
+    pub version: u32,
+    pub acl_len: u32,
+    pub acl_mode: u32,
+    /// First 24 bytes of the ACL payload, stored inline inside the trailer region.
+    pub acl_payload_bytes: [u8; TRAILER_INLINE_ACL_BYTES],
+}
+
+impl Default for RecordAcl {
+    fn default() -> Self {
+        Self {
+            num_entries: 0,
+            version: 0,
+            acl_len: 0,
+            acl_mode: 0,
+            acl_payload_bytes: [0u8; TRAILER_INLINE_ACL_BYTES],
+        }
+    }
+}
 
 /// Principal type for an ACL entry.
 #[derive(Clone, Debug, PartialEq)]
@@ -167,7 +202,7 @@ impl AclData {
 
 pub(crate) fn build_acl_data(
     mode: u32,
-    trailer: &RecordTrailer,
+    trailer: &RecordAcl,
     acl_payload: Option<Vec<u8>>,
 ) -> Option<AclData> {
     if mode & S_IXACL == 0 {

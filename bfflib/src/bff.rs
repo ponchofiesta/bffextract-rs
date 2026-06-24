@@ -7,8 +7,6 @@ pub const FILE_MAGIC: u32 = 0xea6b0009; //0x09006BEA;
 pub const HUFFMAN_MAGIC: u16 = 0xEA6C;
 /// All records should contain one of these magic numbers.
 pub const HEADER_MAGICS: [u16; 3] = [0xEA6B, HUFFMAN_MAGIC, 0xEA6D];
-/// File mode bit for ACLs.
-pub const S_IXACL: u32 = 0x02000000;
 
 /// Representation of the file header.
 ///
@@ -96,40 +94,6 @@ impl Default for RecordHeader {
             unk34: 0,
             compressed_size: 0,
             unk3_c: 0,
-        }
-    }
-}
-
-/// The byte capacity for ACL payload bytes that are embedded directly inside
-/// the [`RecordTrailer`] struct (fields `acl_payload_bytes`).
-pub const TRAILER_INLINE_ACL_BYTES: usize = 24;
-
-/// Representation of the data after each record header and record file name.
-///
-/// Layout (all fields little-endian, struct is 40 bytes on disk):
-/// - `num_entries` / `version` / `acl_len` / `acl_mode`: the ACL descriptor (16 bytes).
-/// - `acl_payload_bytes`: the first [`TRAILER_INLINE_ACL_BYTES`] bytes of the ACL payload
-///   are stored inline here. When `acl_len > TRAILER_INLINE_ACL_BYTES`, the remaining
-///   bytes follow the trailer in the file stream.
-#[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
-pub struct RecordTrailer {
-    pub num_entries: u32,
-    pub version: u32,
-    pub acl_len: u32,
-    pub acl_mode: u32,
-    /// First 24 bytes of the ACL payload, stored inline inside the trailer region.
-    pub acl_payload_bytes: [u8; TRAILER_INLINE_ACL_BYTES],
-}
-
-impl Default for RecordTrailer {
-    fn default() -> Self {
-        Self {
-            num_entries: 0,
-            version: 0,
-            acl_len: 0,
-            acl_mode: 0,
-            acl_payload_bytes: [0u8; TRAILER_INLINE_ACL_BYTES],
         }
     }
 }
