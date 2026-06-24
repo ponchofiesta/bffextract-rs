@@ -47,7 +47,6 @@ Options:
 
 ## Limitations
 
-- Checksum is not verified (archive and content files).
 - Symlinks are unsupported on Windows. Character devices, block devices,
   sockets and fifo are unsupported. I don't see a need for them.
 - Bad file format may be ignored in some cases.

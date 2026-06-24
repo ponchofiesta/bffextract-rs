@@ -15,7 +15,10 @@ use crate::{
         TRAILER_INLINE_ACL_BYTES,
     },
     attribute,
-    bff::{read_aligned_string, FileHeader, RecordHeader, FILE_MAGIC, HEADER_MAGICS},
+    bff::{
+        compute_file_header_checksum, read_aligned_string, FileHeader, RecordHeader, FILE_MAGIC,
+        HEADER_MAGICS,
+    },
     extract::{
         extract_record_best_effort_with_attr, extract_record_with_attr, ArchiveSource,
         ExtractionDisposition,
@@ -39,11 +42,27 @@ enum RecordScanMode {
 
 /// Read BFF [FileHeader] from the reader
 fn read_file_header<R: Read>(reader: &mut R) -> Result<FileHeader> {
-    let file_header: FileHeader = util::read_struct(reader)?;
+    let mut header_bytes = [0u8; std::mem::size_of::<FileHeader>()];
+    reader.read_exact(&mut header_bytes)?;
+    let file_header =
+        unsafe { std::ptr::read_unaligned(header_bytes.as_ptr().cast::<FileHeader>()) };
     if file_header.magic != FILE_MAGIC {
         let magic = file_header.magic;
         return Err(Error::InvalidFileMagic(magic));
     }
+
+    let stored_checksum = file_header.stored_checksum();
+    if stored_checksum != 0 {
+        let computed_checksum =
+            compute_file_header_checksum(&header_bytes).ok_or(Error::InvalidFileChecksumFormat)?;
+        if stored_checksum != computed_checksum {
+            return Err(Error::InvalidFileChecksum {
+                stored: stored_checksum,
+                computed: computed_checksum,
+            });
+        }
+    }
+
     Ok(file_header)
 }
 
@@ -599,6 +618,34 @@ mod tests {
         let header = result.unwrap();
         let magic = header.magic;
         assert_eq!(magic, FILE_MAGIC);
+        assert_eq!(header.stored_checksum(), 0xfb74);
+    }
+
+    #[test]
+    fn test_read_file_header_allows_zero_checksum() {
+        let mut file = open_bff_file("test_acl.bff").unwrap();
+
+        let result = read_file_header(&mut file);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_read_file_header_rejects_invalid_checksum() {
+        let mut file = open_bff_file("test.bff").unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        bytes[4] ^= 0x01;
+
+        let result = read_file_header(&mut std::io::Cursor::new(bytes));
+
+        assert!(matches!(
+            result,
+            Err(Error::InvalidFileChecksum {
+                stored: 0xfb75,
+                computed: 0xfb74,
+            })
+        ));
     }
 
     #[test]

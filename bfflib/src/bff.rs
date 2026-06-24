@@ -49,6 +49,11 @@ pub struct FileHeader {
 unsafe impl PackedStruct for FileHeader {}
 
 impl FileHeader {
+    /// Returns the 16-bit archive header checksum validated by AIX `restbyname`.
+    pub fn stored_checksum(&self) -> u16 {
+        (self.checksum & 0xFFFF) as u16
+    }
+
     /// Returns the constant sentinel stored at offset `0x10`.
     ///
     /// The exact AIX field name is still unknown, so this accessor keeps a
@@ -61,6 +66,30 @@ impl FileHeader {
     pub fn format_version(&self) -> u32 {
         self.unk44
     }
+}
+
+/// Compute the AIX archive-header checksum for a raw file-header block.
+///
+/// The block length is encoded in the first byte as a count of 8-byte units.
+/// AIX `restbyname` validates only the low 16 bits stored at offset `0x04..0x05`.
+pub(crate) fn compute_file_header_checksum(block: &[u8]) -> Option<u16> {
+    let block_units = *block.first()? as usize;
+    let block_len = block_units.checked_mul(8)?;
+    if block_len == 0 || block_len > block.len() || block_len < 6 {
+        return None;
+    }
+
+    let mut sum = 0u32;
+    for (index, byte) in block[..block_len].iter().copied().enumerate() {
+        let value = if matches!(index, 4 | 5) {
+            0
+        } else {
+            u32::from(byte)
+        };
+        sum = (sum + ((value << (value & 0x07)) & 0xFFFF)) & 0xFFFF;
+    }
+
+    Some(sum as u16)
 }
 
 /// Represntation of a record header.
@@ -265,13 +294,22 @@ mod tests {
     #[test]
     fn file_header_semantic_accessors() {
         let header = FileHeader {
+            checksum: 0x0001_fb74,
             unk10: 0x7fff_ffff,
             unk44: 100,
             ..unsafe { std::mem::zeroed() }
         };
 
+        assert_eq!(header.stored_checksum(), 0xfb74);
         assert_eq!(header.archive_limit_marker(), 0x7fff_ffff);
         assert_eq!(header.format_version(), 100);
+    }
+
+    #[test]
+    fn compute_file_header_checksum_matches_sample_header() {
+        let archive = include_bytes!("../../resources/test/test.bff");
+
+        assert_eq!(compute_file_header_checksum(&archive[..72]), Some(0xfb74));
     }
 
     #[test]

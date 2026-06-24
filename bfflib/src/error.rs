@@ -9,6 +9,10 @@ pub enum Error {
     // Read errors
     /// The file had an invalid magic number. Provides the magic number read.
     InvalidFileMagic(u32),
+    /// The file header checksum was invalid. Provides the stored and computed checksum values.
+    InvalidFileChecksum { stored: u16, computed: u16 },
+    /// The file header checksum was invalid. The checksum could not be computed due to an invalid format.
+    InvalidFileChecksumFormat,
     /// An record had an invalid magic number. Provides the magic number read.
     InvalidRecordMagic(u16),
     /// The record was invalid. This also may indicate some unsupported features.
@@ -60,6 +64,14 @@ impl Display for Error {
             InvalidFileMagic(magic) => write!(
                 f,
                 "Invalid file format: File has an invalid magic number '{magic}'."
+            ),
+            InvalidFileChecksum { stored, computed } => write!(
+                f,
+                "Invalid file format: File header checksum mismatch (stored 0x{stored:04X}, computed 0x{computed:04X})."
+            ),
+            InvalidFileChecksumFormat => write!(
+                f,
+                "Invalid file format: File header checksum could not be computed due to an invalid format."
             ),
             InvalidLevelIndex => {
                 write!(f, "Invalid file format: Invalid level index found.")
