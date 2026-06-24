@@ -40,6 +40,7 @@ Options:
   -t, --list                     List content of BFF archive.
   -v, --verbose                  Displays details while extracting.
   -n, --numeric                  List numeric user and group IDs.
+  -a, --acl                      Print ACL of records in AIX text format.
   -h, --help                     Print help
   -V, --version                  Print version
 ```
