@@ -52,7 +52,7 @@ fn align_reader_to_eight<R: Seek>(reader: &mut R) -> Result<()> {
 /// Read next [Record] from the reader
 fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Option<Record>> {
     let record_header: RecordHeader = util::read_struct(reader)?;
-    if record_header.unk01 != 0x0b {
+    if record_header.format_marker() != 0x0b {
         return Err(Error::InvalidRecord);
     }
     let magic = record_header.magic;
