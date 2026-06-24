@@ -152,44 +152,49 @@ impl UserData {
     }
 }
 
+impl UserData {
+    fn display_uid(&self, uid: u32, numeric: bool) -> String {
+        if numeric {
+            uid.to_string()
+        } else {
+            self.get_username_by_uid(uid)
+                .unwrap_or_else(|| uid.to_string())
+        }
+    }
+
+    fn display_gid(&self, gid: u32, numeric: bool) -> String {
+        if numeric {
+            gid.to_string()
+        } else {
+            self.get_groupname_by_gid(gid)
+                .unwrap_or_else(|| gid.to_string())
+        }
+    }
+}
+
+fn record_matches_filter<P: AsRef<Path>>(record: &Record, filter_list: &[P]) -> bool {
+    filter_list.is_empty()
+        || filter_list
+            .iter()
+            .any(|include_path| record.filename().starts_with(include_path))
+}
+
 /// Print ACL entries for all matching records in AIX text format.
 fn print_acls<R: Read + Seek, P: AsRef<Path>>(
-    archive: &mut Archive<R>,
+    archive: &Archive<R>,
     filter_list: &[P],
     numeric: bool,
 ) {
     let user_data = UserData::new();
-    let records: Vec<Record> = archive
+    let records = archive
         .records()
-        .into_iter()
-        .filter(|record| {
-            record.acl().is_some()
-                && (filter_list.is_empty()
-                    || filter_list.iter().any(|p| record.filename().starts_with(p)))
-        })
-        .cloned()
-        .collect();
+        .iter()
+        .filter(|record| record.acl().is_some() && record_matches_filter(record, filter_list));
 
-    for record in &records {
+    for record in records {
         let output = record.format_acl(
-            |id| {
-                if numeric {
-                    id.to_string()
-                } else {
-                    user_data
-                        .get_username_by_uid(id)
-                        .unwrap_or_else(|| id.to_string())
-                }
-            },
-            |id| {
-                if numeric {
-                    id.to_string()
-                } else {
-                    user_data
-                        .get_groupname_by_gid(id)
-                        .unwrap_or_else(|| id.to_string())
-                }
-            },
+            |id| user_data.display_uid(id, numeric),
+            |id| user_data.display_gid(id, numeric),
         );
         if let Some(output) = output {
             println!("{output}");
@@ -200,7 +205,7 @@ fn print_acls<R: Read + Seek, P: AsRef<Path>>(
 
 /// Print content of BFF file for CLI output
 fn print_content<R: Read + Seek, P: AsRef<Path>>(
-    archive: &mut Archive<R>,
+    archive: &Archive<R>,
     filter_list: &[P],
     numeric: bool,
 ) {
@@ -220,32 +225,13 @@ fn print_content<R: Read + Seek, P: AsRef<Path>>(
     });
 
     let user_data = UserData::new();
-    let records: Vec<&Record> = archive
+    let records = archive
         .records()
         .iter()
-        .filter(|record| {
-            filter_list.is_empty()
-                || filter_list
-                    .iter()
-                    .any(|inc_path| record.filename().starts_with(inc_path))
-        })
-        .collect();
+        .filter(|record| record_matches_filter(record, filter_list));
     for record in records {
-        let username = if numeric {
-            format!("{}", record.uid())
-        } else {
-            user_data
-                .get_username_by_uid(record.uid())
-                .unwrap_or(format!("{}", record.uid()))
-        };
-
-        let groupname = if numeric {
-            format!("{}", record.gid())
-        } else {
-            user_data
-                .get_groupname_by_gid(record.gid())
-                .unwrap_or(format!("{}", record.gid()))
-        };
+        let username = user_data.display_uid(record.uid(), numeric);
+        let groupname = user_data.display_gid(record.gid(), numeric);
 
         let filename = record.filename().to_string_lossy().to_string();
         let print_filename = match record.symlink() {
@@ -285,10 +271,7 @@ where
 {
     let report =
         archive.extract_when_best_effort_with_attr(&destination, attributes, |inner_record| {
-            let take = filter_list.is_empty()
-                || filter_list
-                    .iter()
-                    .any(|inc_path| inner_record.filename().starts_with(inc_path));
+            let take = record_matches_filter(inner_record, filter_list);
             if take && verbose {
                 println!("{}", inner_record.filename().display());
             }
