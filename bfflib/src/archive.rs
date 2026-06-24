@@ -461,7 +461,10 @@ fn extract_record_with_attr<R: Read + Seek, D: AsRef<Path>>(
         #[cfg(unix)]
         Some(file_type) if file_type.is_symbolic_link() => {
             create_parent_dir_all(&destination)?;
-            symlink(&destination, record.symlink().unwrap())?;
+            let target = record
+                .symlink()
+                .ok_or_else(|| Error::MissingSymlinkTarget(record.filename().to_path_buf()))?;
+            symlink(target, destination.as_ref())?;
             Ok(())
         }
         _ => Err(Error::UnsupportedFileType(format!(
@@ -905,6 +908,34 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(dest_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_extract_symlink_creates_link_with_record_target() {
+        let mut source = ArchiveSource::new(std::io::Cursor::new(Vec::<u8>::new()));
+        let temp_dir = tempdir().unwrap();
+        let dest_path = temp_dir.path().join("link.txt");
+        let record = Record::new(
+            bff::RecordHeader {
+                mode: 0o120777,
+                ..Default::default()
+            },
+            Default::default(),
+            None,
+            PathBuf::from("backup/link.txt"),
+            Some(PathBuf::from("target.txt")),
+            0,
+        );
+
+        let result =
+            extract_record_with_attr(&mut source, &record, &dest_path, attribute::ATTRIBUTE_NONE);
+
+        assert!(result.is_ok());
+        assert_eq!(
+            fs::read_link(&dest_path).unwrap(),
+            PathBuf::from("target.txt")
+        );
     }
 
     #[test]

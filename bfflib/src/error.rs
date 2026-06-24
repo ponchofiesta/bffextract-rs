@@ -27,6 +27,8 @@ pub enum Error {
     FileNotFound,
     /// A record path would escape the requested extraction root.
     InvalidExtractionPath(PathBuf),
+    /// A symbolic link record was missing its link target.
+    MissingSymlinkTarget(PathBuf),
     /// A record contains unsupported file type
     UnsupportedFileType(String),
 
@@ -74,6 +76,11 @@ impl Display for Error {
             InvalidExtractionPath(path) => write!(
                 f,
                 "Record path escapes extraction root and was rejected: {}",
+                path.display()
+            ),
+            MissingSymlinkTarget(path) => write!(
+                f,
+                "Symbolic link record is missing a link target: {}",
                 path.display()
             ),
             UnsupportedFileType(s) => write!(f, "The file type of the record is unsupported: {s}."),
