@@ -16,7 +16,7 @@ pub const HEADER_MAGICS: [u16; 3] = [0xEA6B, HUFFMAN_MAGIC, 0xEA6D];
 pub struct FileHeader {
     /// Magic number
     pub magic: u32,
-    /// Archive checksum written by the AIX backup producer.
+    /// Archive header checksum written by the AIX backup producer.
     pub checksum: u32,
     /// Archive creation time.
     pub current_date: u32,
