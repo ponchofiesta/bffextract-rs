@@ -112,18 +112,14 @@ fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Option<Record>> {
         (aligned_up - record_header.compressed_size) as i64,
     ))?;
 
-    let mut record_data = RecordData::new(record_header, record_trailer, acl_payload);
-    record_data.filename = PathBuf::from(filename);
-    if let Some(symlink) = symlink {
-        record_data.symlink = Some(PathBuf::from(symlink));
-    }
-    record_data.file_position = position as u32;
-
-    let record = Record {
-        data: record_data,
-        header: record_header,
-        trailer: record_trailer,
-    };
+    let record = Record::new(
+        record_header,
+        record_trailer,
+        acl_payload,
+        PathBuf::from(filename),
+        symlink.map(PathBuf::from),
+        position as u32,
+    );
     Ok(Some(record))
 }
 
@@ -371,76 +367,6 @@ fn is_unsupported_filetype(filetype: FileType) -> bool {
 /// Container for all record data
 #[derive(Clone, Debug)]
 pub struct Record {
-    data: RecordData,
-    header: RecordHeader,
-    trailer: RecordAcl,
-}
-
-impl Record {
-    pub fn filename(&self) -> &Path {
-        &self.data.filename
-    }
-    pub fn symlink(&self) -> Option<&Path> {
-        self.data.symlink.as_ref().map(|pb| pb.as_ref())
-    }
-    pub fn compressed_size(&self) -> u32 {
-        self.data.compressed_size
-    }
-    pub fn size(&self) -> u32 {
-        self.data.size
-    }
-    pub fn mode(&self) -> &Mode {
-        &self.data.mode
-    }
-    pub fn uid(&self) -> u32 {
-        self.data.uid
-    }
-    pub fn gid(&self) -> u32 {
-        self.data.gid
-    }
-    pub fn mdate(&self) -> &NaiveDateTime {
-        &self.data.mdate
-    }
-    pub fn adate(&self) -> &NaiveDateTime {
-        &self.data.adate
-    }
-    pub fn file_position(&self) -> u32 {
-        self.data.file_position
-    }
-    pub fn magic(&self) -> u16 {
-        self.data.magic
-    }
-    pub fn acl(&self) -> Option<&AclData> {
-        self.data.acl.as_ref()
-    }
-
-    pub fn format_acl<F, G>(&self, resolve_uid: F, resolve_gid: G) -> Option<String>
-    where
-        F: Fn(u32) -> String,
-        G: Fn(u32) -> String,
-    {
-        let acl = self.acl()?;
-        Some(format_acl_text(
-            self.filename(),
-            self.uid(),
-            self.gid(),
-            acl,
-            resolve_uid,
-            resolve_gid,
-        ))
-    }
-
-    pub fn header(&self) -> &RecordHeader {
-        &self.header
-    }
-    pub fn trailer(&self) -> &RecordAcl {
-        &self.trailer
-    }
-}
-
-/// Transformed representation of a single fileset record (file or directory entry).
-#[derive(Clone, Debug)]
-pub struct RecordData {
     /// Filename
     pub filename: PathBuf,
     pub symlink: Option<PathBuf>,
@@ -463,14 +389,28 @@ pub struct RecordData {
     pub magic: u16,
     /// Access control list
     pub acl: Option<AclData>,
+    raw: RecordRaw,
 }
 
-impl RecordData {
-    pub fn new(header: RecordHeader, trailer: RecordAcl, acl_payload: Option<Vec<u8>>) -> Self {
-        let acl = build_acl_data(header.mode, &trailer, acl_payload);
+#[derive(Clone, Debug)]
+struct RecordRaw {
+    header: RecordHeader,
+    record_acl: RecordAcl,
+}
+
+impl Record {
+    fn new(
+        header: RecordHeader,
+        record_acl: RecordAcl,
+        acl_payload: Option<Vec<u8>>,
+        filename: PathBuf,
+        symlink: Option<PathBuf>,
+        file_position: u32,
+    ) -> Self {
+        let acl = build_acl_data(header.mode, &record_acl, acl_payload);
         Self {
-            filename: PathBuf::new(),
-            symlink: None,
+            filename,
+            symlink,
             compressed_size: header.compressed_size,
             size: header.size,
             mode: Mode::from(header.mode),
@@ -482,10 +422,71 @@ impl RecordData {
             adate: DateTime::from_timestamp(header.atime as i64, 0)
                 .map(|dt| dt.naive_local())
                 .unwrap_or_else(|| Utc::now().naive_local()),
-            file_position: 0,
+            file_position,
             magic: header.magic,
             acl,
+            raw: RecordRaw { header, record_acl },
         }
+    }
+
+    pub fn filename(&self) -> &Path {
+        &self.filename
+    }
+    pub fn symlink(&self) -> Option<&Path> {
+        self.symlink.as_ref().map(|pb| pb.as_ref())
+    }
+    pub fn compressed_size(&self) -> u32 {
+        self.compressed_size
+    }
+    pub fn size(&self) -> u32 {
+        self.size
+    }
+    pub fn mode(&self) -> &Mode {
+        &self.mode
+    }
+    pub fn uid(&self) -> u32 {
+        self.uid
+    }
+    pub fn gid(&self) -> u32 {
+        self.gid
+    }
+    pub fn mdate(&self) -> &NaiveDateTime {
+        &self.mdate
+    }
+    pub fn adate(&self) -> &NaiveDateTime {
+        &self.adate
+    }
+    pub fn file_position(&self) -> u32 {
+        self.file_position
+    }
+    pub fn magic(&self) -> u16 {
+        self.magic
+    }
+    pub fn acl(&self) -> Option<&AclData> {
+        self.acl.as_ref()
+    }
+
+    pub fn format_acl<F, G>(&self, resolve_uid: F, resolve_gid: G) -> Option<String>
+    where
+        F: Fn(u32) -> String,
+        G: Fn(u32) -> String,
+    {
+        let acl = self.acl()?;
+        Some(format_acl_text(
+            self.filename(),
+            self.uid(),
+            self.gid(),
+            acl,
+            resolve_uid,
+            resolve_gid,
+        ))
+    }
+
+    pub fn header(&self) -> &RecordHeader {
+        &self.raw.header
+    }
+    pub fn record_acl(&self) -> &RecordAcl {
+        &self.raw.record_acl
     }
 }
 
@@ -528,7 +529,7 @@ fn attach_nfs4_acl_texts<R: Read + Seek>(reader: &mut R, records: &mut [Record])
         }
 
         if let Some(target_index) = pending_nfs4.pop() {
-            if let Some(acl) = records[target_index].data.acl.as_mut() {
+            if let Some(acl) = records[target_index].acl.as_mut() {
                 acl.attach_nfs4_text(text);
             }
         }
@@ -578,7 +579,7 @@ mod tests {
         let record = result.unwrap();
         assert!(record.is_some());
         let record = record.unwrap();
-        let magic = record.header.magic;
+        let magic = record.header().magic;
         assert!(HEADER_MAGICS.contains(&magic));
     }
 
@@ -652,11 +653,14 @@ mod tests {
             atime: 1_600_000_000,
             ..Default::default()
         };
-        let record = Record {
-            data: RecordData::new(record_header, Default::default(), None),
-            header: record_header,
-            trailer: Default::default(),
-        };
+        let record = Record::new(
+            record_header,
+            Default::default(),
+            None,
+            PathBuf::from("mock_file.txt"),
+            None,
+            0,
+        );
         let temp_dir = tempdir().unwrap();
         let file_path = temp_dir.path().join("mock_file.txt");
 
@@ -684,11 +688,14 @@ mod tests {
             atime: 1_600_000_000,
             ..Default::default()
         };
-        let record = Record {
-            data: record_header.into(),
-            header: record_header,
-            trailer: Default::default(),
-        };
+        let record = Record::new(
+            record_header,
+            Default::default(),
+            None,
+            PathBuf::from("mock_file.txt"),
+            None,
+            0,
+        );
         let temp_dir = tempdir().unwrap();
         let file_path = temp_dir.path().join("mock_file.txt");
 
