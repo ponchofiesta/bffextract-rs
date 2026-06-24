@@ -1,16 +1,13 @@
 //! Reading an BFF archive
 
 use std::{
-    fs::File,
     io::{self, Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
 };
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use file_mode::{FileType, Mode};
+use file_mode::Mode;
 use normalize_path::NormalizePath;
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 
 use crate::{
     acl::{
@@ -19,8 +16,11 @@ use crate::{
     },
     attribute,
     bff::{read_aligned_string, FileHeader, RecordHeader, FILE_MAGIC, HEADER_MAGICS},
-    extract::{extract_file, set_file_attributes, ArchiveSource},
-    util::{self, create_dir_all, create_parent_dir_all},
+    extract::{
+        extract_record_best_effort_with_attr, extract_record_with_attr, ArchiveSource,
+        ExtractionDisposition,
+    },
+    util::{self},
 };
 use crate::{Error, Result};
 
@@ -29,44 +29,12 @@ pub use crate::acl::{
     Nfs4AclEntry, Nfs4AclPrincipal,
 };
 pub use crate::extract::RecordReader;
+pub use crate::extract::{ExtractedEntry, ExtractionReport, ExtractionWarning, SkippedEntry};
 
 #[derive(Clone, Copy)]
 enum RecordScanMode {
     Strict,
     BestEffort,
-}
-
-#[derive(Debug)]
-pub struct ExtractedEntry {
-    pub record: PathBuf,
-    pub destination: PathBuf,
-}
-
-#[derive(Debug)]
-pub struct SkippedEntry {
-    pub record: PathBuf,
-    pub destination: PathBuf,
-    pub error: String,
-}
-
-#[derive(Debug)]
-pub struct ExtractionWarning {
-    pub record: PathBuf,
-    pub destination: PathBuf,
-    pub message: String,
-}
-
-#[derive(Debug, Default)]
-pub struct ExtractionReport {
-    pub extracted_entries: Vec<ExtractedEntry>,
-    pub skipped_entries: Vec<SkippedEntry>,
-    pub warnings: Vec<ExtractionWarning>,
-}
-
-enum ExtractionDisposition {
-    Extracted,
-    ExtractedWithWarning(String),
-    Skipped(Error),
 }
 
 /// Read BFF [FileHeader] from the reader
@@ -408,7 +376,7 @@ impl<R: Read + Seek> Archive<R> {
                         report.skipped_entries.push(SkippedEntry {
                             record: record.filename().to_path_buf(),
                             destination: destination.as_ref().to_path_buf(),
-                            error: error.to_string(),
+                            error,
                         });
                         continue;
                     }
@@ -435,7 +403,7 @@ impl<R: Read + Seek> Archive<R> {
                     report.skipped_entries.push(SkippedEntry {
                         record: record.filename().to_path_buf(),
                         destination: target_path,
-                        error: error.to_string(),
+                        error,
                     });
                 }
             }
@@ -443,87 +411,6 @@ impl<R: Read + Seek> Archive<R> {
 
         Ok(report)
     }
-}
-
-fn extract_record_with_attr<R: Read + Seek, D: AsRef<Path>>(
-    source: &mut ArchiveSource<R>,
-    record: &Record,
-    destination: D,
-    attributes: u8,
-) -> Result<()> {
-    match record.mode().file_type() {
-        Some(file_type) if file_type.is_directory() => Ok(create_dir_all(&destination)?),
-        Some(file_type) if file_type.is_regular_file() => {
-            create_parent_dir_all(&destination)?;
-            let mut reader = source.open(record)?.ok_or(Error::FileNotFound)?;
-            extract_file(&mut reader, &destination)
-        }
-        #[cfg(unix)]
-        Some(file_type) if file_type.is_symbolic_link() => {
-            create_parent_dir_all(&destination)?;
-            let target = record
-                .symlink()
-                .ok_or_else(|| Error::MissingSymlinkTarget(record.filename().to_path_buf()))?;
-            symlink(target, destination.as_ref())?;
-            Ok(())
-        }
-        _ => Err(Error::UnsupportedFileType(format!(
-            "{:?}",
-            record.mode().file_type()
-        ))),
-    }?;
-
-    set_file_attributes(&destination, record, attributes)?;
-
-    Ok(())
-}
-
-fn extract_record_best_effort_with_attr<R: Read + Seek, D: AsRef<Path>>(
-    source: &mut ArchiveSource<R>,
-    record: &Record,
-    destination: D,
-    attributes: u8,
-) -> ExtractionDisposition {
-    match extract_record_with_attr(source, record, &destination, attributes) {
-        Ok(()) => ExtractionDisposition::Extracted,
-        Err(Error::UnsupportedFileType(_))
-            if record
-                .mode()
-                .file_type()
-                .is_some_and(is_unsupported_filetype) =>
-        {
-            let destination = destination.as_ref();
-            let warning = format!(
-                "Unsupported file type {:?}. Will create an empty file instead.",
-                record.mode().file_type()
-            );
-
-            let fallback = (|| -> Result<()> {
-                create_parent_dir_all(&destination)?;
-                File::create(destination)?;
-                set_file_attributes(destination, record, attributes)?;
-                Ok(())
-            })();
-
-            match fallback {
-                Ok(()) => ExtractionDisposition::ExtractedWithWarning(warning),
-                Err(error) => ExtractionDisposition::Skipped(error),
-            }
-        }
-        Err(error) => ExtractionDisposition::Skipped(error),
-    }
-}
-
-fn is_unsupported_filetype(filetype: FileType) -> bool {
-    let unsup = filetype.is_block_device()
-        || filetype.is_character_device()
-        || filetype.is_fifo()
-        || filetype.is_socket();
-
-    #[cfg(windows)]
-    let unsup = unsup || filetype.is_symbolic_link();
-
-    unsup
 }
 
 /// Container for all record data
@@ -703,13 +590,13 @@ fn attach_nfs4_acl_texts<R: Read + Seek>(reader: &mut R, records: &mut [Record])
 #[cfg(test)]
 mod tests {
     use crate::bff;
-    use crate::extract::ArchiveSource;
+    use crate::extract::{extract_file, set_file_attributes, ArchiveSource};
 
     use super::*;
     use filetime::FileTime;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
-    use std::{fs, io::Result};
+    use std::{fs, fs::File, io::Result};
     use tempfile::tempdir;
 
     fn open_bff_file<P: AsRef<Path>>(filename: P) -> Result<impl Read + Seek> {
@@ -999,7 +886,7 @@ mod tests {
             .skipped_entries
             .iter()
             .any(|entry| entry.record == PathBuf::from("../escape.txt")
-                && entry.error.contains("escapes extraction root")));
+                && matches!(entry.error, Error::InvalidExtractionPath(ref path) if path == &PathBuf::from("../escape.txt"))));
     }
 
     // -----------------------------------------------------------------------
