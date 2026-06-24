@@ -283,16 +283,27 @@ where
     P: AsRef<Path>,
     D: AsRef<Path>,
 {
-    archive.extract_when_with_attr(&destination, attributes, |inner_record| {
-        let take = filter_list.is_empty()
-            || filter_list
-                .iter()
-                .any(|inc_path| inner_record.filename().starts_with(inc_path));
-        if take && verbose {
-            println!("{}", inner_record.filename().display());
-        }
-        take
-    })
+    let report =
+        archive.extract_when_best_effort_with_attr(&destination, attributes, |inner_record| {
+            let take = filter_list.is_empty()
+                || filter_list
+                    .iter()
+                    .any(|inc_path| inner_record.filename().starts_with(inc_path));
+            if take && verbose {
+                println!("{}", inner_record.filename().display());
+            }
+            take
+        })?;
+
+    for warning in report.warnings {
+        println!("{}: {}", warning.record.display(), warning.message);
+    }
+
+    for skipped in report.skipped_entries {
+        println!("{}: {}", skipped.record.display(), skipped.error);
+    }
+
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -303,7 +314,7 @@ fn main() -> Result<()> {
         return Err(Error::FileToBig);
     }
     let reader = BufReader::new(reader);
-    let mut archive = Archive::new(reader)?;
+    let mut archive = Archive::scan(reader)?;
 
     if args.list {
         print_content(&mut archive, &args.file_list, args.numeric);
@@ -409,7 +420,7 @@ mod tests {
 
     #[test]
     fn acl_mixed_sample_formats_aixc_acl_as_aixc() {
-        let archive = Archive::new(open_bff_file("acl_aixc_nfs4.bff")).unwrap();
+        let archive = Archive::scan(open_bff_file("acl_aixc_nfs4.bff")).unwrap();
         let records = archive.records();
         let record = records
             .iter()
@@ -427,7 +438,7 @@ mod tests {
 
     #[test]
     fn acl_mixed_sample_formats_nfs4_acl_as_nfs4() {
-        let archive = Archive::new(open_bff_file("acl_aixc_nfs4.bff")).unwrap();
+        let archive = Archive::scan(open_bff_file("acl_aixc_nfs4.bff")).unwrap();
         let records = archive.records();
         let record = records
             .iter()

@@ -30,6 +30,45 @@ pub use crate::acl::{
 };
 pub use crate::extract::RecordReader;
 
+#[derive(Clone, Copy)]
+enum RecordScanMode {
+    Strict,
+    BestEffort,
+}
+
+#[derive(Debug)]
+pub struct ExtractedEntry {
+    pub record: PathBuf,
+    pub destination: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct SkippedEntry {
+    pub record: PathBuf,
+    pub destination: PathBuf,
+    pub error: String,
+}
+
+#[derive(Debug)]
+pub struct ExtractionWarning {
+    pub record: PathBuf,
+    pub destination: PathBuf,
+    pub message: String,
+}
+
+#[derive(Debug, Default)]
+pub struct ExtractionReport {
+    pub extracted_entries: Vec<ExtractedEntry>,
+    pub skipped_entries: Vec<SkippedEntry>,
+    pub warnings: Vec<ExtractionWarning>,
+}
+
+enum ExtractionDisposition {
+    Extracted,
+    ExtractedWithWarning(String),
+    Skipped(Error),
+}
+
 /// Read BFF [FileHeader] from the reader
 fn read_file_header<R: Read>(reader: &mut R) -> Result<FileHeader> {
     let file_header: FileHeader = util::read_struct(reader)?;
@@ -123,17 +162,17 @@ fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Record> {
     Ok(record)
 }
 
-/// Read all [Record]s from the reader
-fn read_records<R: Read + Seek>(reader: &mut R) -> Result<Vec<Record>> {
+/// Read all [Record]s from the reader.
+fn read_records<R: Read + Seek>(reader: &mut R, mode: RecordScanMode) -> Result<Vec<Record>> {
     let mut records = vec![];
     loop {
         match read_next_record(reader) {
             Ok(record) => records.push(record),
             Err(e) => match e {
-                Error::InvalidRecord => (),
                 // Hopefully not unexpected EOF
                 Error::IoError(io_e) if io_e.kind() == io::ErrorKind::UnexpectedEof => break,
-                Error::InvalidRecordMagic(_magic) => (),
+                Error::InvalidRecord if matches!(mode, RecordScanMode::BestEffort) => {}
+                Error::InvalidRecordMagic(_) if matches!(mode, RecordScanMode::BestEffort) => {}
                 _ => return Err(e),
             },
         }
@@ -166,11 +205,28 @@ pub struct Archive<R> {
 }
 
 impl<R: Read + Seek> Archive<R> {
-    /// Creates a new Archive instance and reads the file informations and info about all records.
-    pub fn new(mut reader: R) -> Result<Self> {
+    /// Creates a new Archive instance using best-effort record scanning.
+    ///
+    /// This preserves the historical library behavior of skipping malformed
+    /// records where the stream can continue.
+    pub fn new(reader: R) -> Result<Self> {
+        Self::from_reader_with_mode(reader, RecordScanMode::BestEffort)
+    }
+
+    /// Creates a new Archive instance using strict record parsing.
+    pub fn new_strict(reader: R) -> Result<Self> {
+        Self::from_reader_with_mode(reader, RecordScanMode::Strict)
+    }
+
+    /// Creates a new Archive instance using explicit best-effort scanning.
+    pub fn scan(reader: R) -> Result<Self> {
+        Self::new(reader)
+    }
+
+    fn from_reader_with_mode(mut reader: R, mode: RecordScanMode) -> Result<Self> {
         let header = read_file_header(&mut reader)?;
         let records_start_pos = reader.stream_position()?;
-        let mut records = read_records(&mut reader)?;
+        let mut records = read_records(&mut reader, mode)?;
         attach_nfs4_acl_texts(&mut reader, &mut records)?;
         let archive = Self {
             source: ArchiveSource::new(reader),
@@ -295,17 +351,63 @@ impl<R: Read + Seek> Archive<R> {
     {
         let source = &mut self.source;
         for record in self.records.iter() {
-            if when(&record) {
+            if when(record) {
                 let target_path = destination.as_ref().join(record.filename()).normalize();
-                match extract_record_with_attr(source, record, &target_path, attributes) {
-                    Err(e) => {
-                        eprintln!("{}: {e}", record.filename().display());
-                    }
-                    _ => (),
-                }
+                extract_record_with_attr(source, record, &target_path, attributes)?;
             }
         }
         Ok(())
+    }
+
+    /// Extract the whole archive in best-effort mode and return a report.
+    pub fn extract_when_best_effort_with_attr<'a, P, C>(
+        &'a mut self,
+        destination: P,
+        attributes: u8,
+        when: C,
+    ) -> Result<ExtractionReport>
+    where
+        P: AsRef<Path>,
+        C: Fn(&Record) -> bool,
+    {
+        let source = &mut self.source;
+        let mut report = ExtractionReport::default();
+
+        for record in self.records.iter() {
+            if !when(record) {
+                continue;
+            }
+
+            let target_path = destination.as_ref().join(record.filename()).normalize();
+            match extract_record_best_effort_with_attr(source, record, &target_path, attributes) {
+                ExtractionDisposition::Extracted => {
+                    report.extracted_entries.push(ExtractedEntry {
+                        record: record.filename().to_path_buf(),
+                        destination: target_path,
+                    });
+                }
+                ExtractionDisposition::ExtractedWithWarning(message) => {
+                    report.extracted_entries.push(ExtractedEntry {
+                        record: record.filename().to_path_buf(),
+                        destination: target_path.clone(),
+                    });
+                    report.warnings.push(ExtractionWarning {
+                        record: record.filename().to_path_buf(),
+                        destination: target_path,
+                        message,
+                    });
+                }
+                ExtractionDisposition::Skipped(error) => {
+                    report.skipped_entries.push(SkippedEntry {
+                        record: record.filename().to_path_buf(),
+                        destination: target_path,
+                        error: error.to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(report)
     }
 }
 
@@ -328,16 +430,6 @@ fn extract_record_with_attr<R: Read + Seek, D: AsRef<Path>>(
             symlink(&destination, record.symlink().unwrap())?;
             Ok(())
         }
-        Some(file_type) if is_unsupported_filetype(file_type) => {
-            create_parent_dir_all(&destination)?;
-            eprintln!(
-                "{}: Unsupported file type {:?}. Will create an empty file instead.",
-                record.filename().display(),
-                record.mode().file_type()
-            );
-            File::create(&destination)?;
-            Ok(())
-        }
         _ => Err(Error::UnsupportedFileType(format!(
             "{:?}",
             record.mode().file_type()
@@ -347,6 +439,42 @@ fn extract_record_with_attr<R: Read + Seek, D: AsRef<Path>>(
     set_file_attributes(&destination, record, attributes)?;
 
     Ok(())
+}
+
+fn extract_record_best_effort_with_attr<R: Read + Seek, D: AsRef<Path>>(
+    source: &mut ArchiveSource<R>,
+    record: &Record,
+    destination: D,
+    attributes: u8,
+) -> ExtractionDisposition {
+    match extract_record_with_attr(source, record, &destination, attributes) {
+        Ok(()) => ExtractionDisposition::Extracted,
+        Err(Error::UnsupportedFileType(_))
+            if record
+                .mode()
+                .file_type()
+                .is_some_and(is_unsupported_filetype) =>
+        {
+            let destination = destination.as_ref();
+            let warning = format!(
+                "Unsupported file type {:?}. Will create an empty file instead.",
+                record.mode().file_type()
+            );
+
+            let fallback = (|| -> Result<()> {
+                create_parent_dir_all(&destination)?;
+                File::create(destination)?;
+                set_file_attributes(destination, record, attributes)?;
+                Ok(())
+            })();
+
+            match fallback {
+                Ok(()) => ExtractionDisposition::ExtractedWithWarning(warning),
+                Err(error) => ExtractionDisposition::Skipped(error),
+            }
+        }
+        Err(error) => ExtractionDisposition::Skipped(error),
+    }
 }
 
 fn is_unsupported_filetype(filetype: FileType) -> bool {
@@ -583,7 +711,7 @@ mod tests {
         let mut file = open_bff_file("test.bff").unwrap();
         file.seek(SeekFrom::Start(72)).unwrap();
 
-        let result = read_records(&mut file);
+        let result = read_records(&mut file, RecordScanMode::BestEffort);
 
         assert!(result.is_ok());
         let records = result.unwrap();
@@ -596,7 +724,7 @@ mod tests {
         let mut file = open_bff_file("test.bff").unwrap();
         file.seek(SeekFrom::Start(72)).unwrap();
 
-        let records = read_records(&mut file).unwrap();
+        let records = read_records(&mut file, RecordScanMode::BestEffort).unwrap();
 
         let filename = Path::new("backup/file.txt");
         let record = record_by_filename(&records, filename);
@@ -614,7 +742,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let dest_path = temp_dir.path().join("extracted_file.txt");
 
-        let records = read_records(&mut file).unwrap();
+        let records = read_records(&mut file, RecordScanMode::BestEffort).unwrap();
 
         let mut source = ArchiveSource::new(&mut file);
         let mut reader = source.open(&records[1]).unwrap().unwrap();
@@ -630,7 +758,7 @@ mod tests {
         let mut file = open_bff_file("test.bff").unwrap();
         file.seek(SeekFrom::Start(72)).unwrap();
 
-        let records = read_records(&mut file).unwrap();
+        let records = read_records(&mut file, RecordScanMode::BestEffort).unwrap();
 
         let mut source = ArchiveSource::new(&mut file);
         let result = source.open(&records[0]);
