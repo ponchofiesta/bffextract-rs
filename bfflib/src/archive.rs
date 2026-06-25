@@ -9,22 +9,22 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use file_mode::Mode;
 use normalize_path::NormalizePath;
 
+use crate::{Error, Result};
 use crate::{
     acl::{
-        build_acl_data, format_acl_text, RecordAcl, AIXC_ACL_MODE_FLAG, S_IXACL,
-        TRAILER_INLINE_ACL_BYTES,
+        AIXC_ACL_MODE_FLAG, RecordAcl, S_IXACL, TRAILER_INLINE_ACL_BYTES, build_acl_data,
+        format_acl_text,
     },
     attribute,
     bff::{
-        compute_file_header_checksum, read_aligned_string, FileHeader, RecordHeader, FILE_MAGIC,
-        HEADER_MAGICS,
+        FILE_MAGIC, FileHeader, HEADER_MAGICS, RecordHeader, compute_file_header_checksum,
+        read_aligned_string,
     },
     extract::{
-        extract_record_best_effort_with_attr, extract_record_with_attr, ArchiveSource,
-        ExtractionDisposition,
+        ArchiveSource, ExtractionDisposition, extract_record_best_effort_with_attr,
+        extract_record_with_attr,
     },
 };
-use crate::{Error, Result};
 
 pub use crate::acl::{
     AclData, AclEntry, AclMetadata, AclPrincipalType, AixcAcl, AixcPermissions, Nfs4Acl,
@@ -74,13 +74,17 @@ fn align_reader_to_eight<R: Seek>(reader: &mut R) -> Result<()> {
     Ok(())
 }
 
+fn is_offset_record(record_header: &RecordHeader) -> bool {
+    record_header.format_marker() == 0x07
+}
+
 /// Read the next [Record] from the reader.
-fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Record> {
+fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Option<Record>> {
     let mut header_bytes = [0u8; std::mem::size_of::<RecordHeader>()];
     reader.read_exact(&mut header_bytes)?;
     let record_header: RecordHeader =
         unsafe { std::ptr::read_unaligned(header_bytes.as_ptr().cast()) };
-    if record_header.format_marker() != 0x0b {
+    if !matches!(record_header.format_marker(), 0x0b | 0x07) {
         return Err(Error::InvalidRecord);
     }
     let magic = record_header.magic;
@@ -151,7 +155,12 @@ fn read_next_record<R: Read + Seek>(reader: &mut R) -> Result<Record> {
         symlink.map(PathBuf::from),
         position as u32,
     );
-    Ok(record)
+
+    if is_offset_record(record.header()) {
+        return Ok(None);
+    }
+
+    Ok(Some(record))
 }
 
 /// Read all [Record]s from the reader.
@@ -159,7 +168,8 @@ fn read_records<R: Read + Seek>(reader: &mut R, mode: RecordScanMode) -> Result<
     let mut records = vec![];
     loop {
         match read_next_record(reader) {
-            Ok(record) => records.push(record),
+            Ok(Some(record)) => records.push(record),
+            Ok(None) => break,
             Err(e) => match e {
                 // Hopefully not unexpected EOF
                 Error::IoError(io_e) if io_e.kind() == io::ErrorKind::UnexpectedEof => break,
@@ -598,7 +608,7 @@ fn attach_nfs4_acl_texts<R: Read + Seek>(reader: &mut R, records: &mut [Record])
 #[cfg(test)]
 mod tests {
     use crate::bff;
-    use crate::extract::{extract_file, set_file_attributes, ArchiveSource};
+    use crate::extract::{ArchiveSource, extract_file, set_file_attributes};
 
     use super::*;
     use filetime::FileTime;
@@ -661,9 +671,20 @@ mod tests {
         let result = read_next_record(&mut file);
 
         assert!(result.is_ok());
-        let record = result.unwrap();
+        let record = result.unwrap().unwrap();
         let magic = record.header().magic;
         assert!(HEADER_MAGICS.contains(&magic));
+    }
+
+    #[test]
+    fn test_read_next_record_skips_offset_records() {
+        let mut file = open_bff_file("test.bff").unwrap();
+        file.seek(SeekFrom::Start(584)).unwrap();
+
+        let result = read_next_record(&mut file);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
     }
 
     #[test]
@@ -816,12 +837,16 @@ mod tests {
     }
 
     #[test]
-    fn test_new_is_strict_while_scan_is_best_effort() {
+    fn test_new_accepts_aix_offset_records() {
         let strict = Archive::new(open_bff_file("test.bff").unwrap());
         let best_effort = Archive::scan(open_bff_file("test.bff").unwrap());
 
-        assert!(strict.is_err());
+        assert!(strict.is_ok());
         assert!(best_effort.is_ok());
+        assert_eq!(
+            strict.unwrap().records().len(),
+            best_effort.unwrap().records().len()
+        );
     }
 
     #[test]
@@ -1078,10 +1103,11 @@ mod tests {
         let archive = Archive::scan(file).unwrap();
         let acl = archive.records()[3].acl().unwrap();
 
-        assert!(acl
-            .as_nfs4()
-            .and_then(|nfs4| nfs4.text.as_deref())
-            .is_some_and(|text| text.starts_with("*\n* ACL_type   NFS4")));
+        assert!(
+            acl.as_nfs4()
+                .and_then(|nfs4| nfs4.text.as_deref())
+                .is_some_and(|text| text.starts_with("*\n* ACL_type   NFS4"))
+        );
     }
 
     #[test]
